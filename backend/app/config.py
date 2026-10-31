@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     # database round trips. Turning it on is an explicit choice to simulate --
     # it switches BOTH the model and the tool clients to deterministic stubs,
     # which is how the test suite runs with no network at all.
+    # Observability. Spans are batched and exported off-thread; absent
+    # credentials mean spans are still created and timed but never leave the
+    # process, which keeps tracing from being a hard dependency of a demo.
+    tracing_enabled: bool = True
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "http://localhost:3030"
+    tracing_export_timeout_s: int = 5
+
     llm_offline_mode: bool = False
     telemetry_tick_ms: int = 100
     workflows_dir: Path = REPO_ROOT / "workflows"

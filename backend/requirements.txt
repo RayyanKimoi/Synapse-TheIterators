@@ -23,5 +23,14 @@ redis>=5.0
 # are never bypassed.
 dspy-ai>=2.5
 
+# Observability. Spans are created by app/observability.py and exported to
+# Langfuse over OTLP; all three are imported lazily, so their absence degrades
+# tracing to no-ops rather than failing the run. Langfuse OTLP ingest requires
+# Langfuse v3 or later.
+opentelemetry-api>=1.27
+opentelemetry-sdk>=1.27
+opentelemetry-exporter-otlp-proto-http>=1.27
+langfuse>=2.50
+
 # uvloop is POSIX-only; uvicorn picks it up automatically when installed.
 uvloop>=0.19; sys_platform != "win32"

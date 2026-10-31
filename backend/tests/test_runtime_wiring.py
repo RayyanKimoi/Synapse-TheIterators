@@ -293,8 +293,9 @@ def test_a_halted_run_cannot_certify_invariance(workflow: WorkflowIR) -> None:
 
 
 def test_missing_keys_fail_the_contract(workflow: WorkflowIR) -> None:
-    # Without the synthesizer the crawlers are terminal, and nothing emits the keys.
-    trimmed = workflow.model_copy(update={"nodes": workflow.nodes[:-1]})
+    # Drop both reasoning agents so the crawlers are terminal. A tool node emits
+    # its own payload shape, so nothing in the run produces the declared keys.
+    trimmed = workflow.model_copy(update={"nodes": workflow.nodes[:-2]})
     contract = _run(trimmed)[-1][1]["contract"]
     assert contract["missing_output_keys"] == REQUIRED_KEYS
     assert not contract["passed"]

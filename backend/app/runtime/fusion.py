@@ -24,7 +24,9 @@ silently drop all three. DSPy's job here is what it is good at -- declaring and
 validating the merged input/output contract.
 """
 
+import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,15 +45,17 @@ class FusionGroup:
     """A chain of LLM nodes served by one request.
 
     `members` is in execution order; the first is the leader that actually
-    calls the model. `fields` maps each member id to its output field name in
-    the merged response.
+    calls the model. `fields` maps each member id to the output field names it
+    owns in the merged response -- normally one, but a terminal node owns the
+    IR's `required_output_keys`, so merging preserves the schema it is
+    contractually obliged to emit instead of flattening it to a single string.
     """
 
     leader: str
     members: tuple[str, ...]
     model: str
     instructions: str
-    fields: dict[str, str]
+    fields: dict[str, tuple[str, ...]]
 
     @property
     def followers(self) -> tuple[str, ...]:
@@ -119,10 +123,20 @@ def plan_fusion(workflow: WorkflowIR, graph: nx.DiGraph) -> dict[str, FusionGrou
             chains.append(chain)
             consumed.update(chain)
 
+    sinks = {node for node in graph.nodes if graph.out_degree(node) == 0}
+    required = tuple(workflow.test_assertions.required_output_keys)
+
     groups: dict[str, FusionGroup] = {}
     for chain in chains:
         members = tuple(chain)
-        fields = {member: _field_name(member) for member in members}
+        fields = {
+            # A terminal node keeps its declared output schema; everything else
+            # contributes one field named after itself.
+            member: required
+            if member in sinks and required
+            else (_field_name(member),)
+            for member in members
+        }
         group = FusionGroup(
             leader=members[0],
             members=members,
@@ -151,7 +165,7 @@ def _instructions(members: list[WorkflowNode], fields: dict[str, str]) -> str:
 
 def signature_spec(group: FusionGroup) -> str:
     """`query, context -> field_a, field_b`, validated by DSPy when present."""
-    spec = f"query, context -> {', '.join(group.fields[m] for m in group.members)}"
+    spec = f"query, context -> {', '.join(response_keys(group))}"
     dspy = _load_dspy()
     if dspy is None:
         return spec
@@ -171,5 +185,17 @@ def fused_system_prompt(group: FusionGroup) -> str:
 
 
 def response_keys(group: FusionGroup) -> list[str]:
-    """The merged output fields, in member order, for the gateway contract."""
-    return [group.fields[member] for member in group.members]
+    """Every merged output field, in member order, for the gateway contract."""
+    return [name for member in group.members for name in group.fields[member]]
+
+
+def slice_for(merged: Mapping[str, Any], fields: tuple[str, ...]) -> str:
+    """One member's share of the merged response.
+
+    A single-field member gets its string. A member that owns several fields --
+    a terminal node carrying `required_output_keys` -- gets them back as a JSON
+    object, which is the shape the contract check reads.
+    """
+    if len(fields) == 1:
+        return str(merged[fields[0]])
+    return json.dumps({name: merged[name] for name in fields})

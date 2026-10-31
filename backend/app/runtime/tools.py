@@ -17,6 +17,7 @@ import time
 import httpx
 
 from ..config import Settings
+from ..observability import fail, record, span
 from ..models.ir import WorkflowNode
 from .profile import node_latency_ms
 
@@ -37,16 +38,39 @@ async def run_tool(
     node: WorkflowNode, query: str, settings: Settings
 ) -> tuple[str, int]:
     """Execute `node`'s tool and return (payload JSON, measured latency ms)."""
-    if settings.llm_offline_mode:
-        return _offline_stub(node)
+    with span(
+        f"tool {node.tool_name}",
+        **{
+            "synapse.tool.name": node.tool_name,
+            "synapse.tool.node_id": node.id,
+            "synapse.tool.side_effect": node.side_effect,
+        },
+    ) as active:
+        if settings.llm_offline_mode:
+            text, latency_ms = _offline_stub(node)
+            record(active, **{"synapse.tool.simulated": True})
+            return text, latency_ms
 
-    if node.tool_name == "tavily_search":
-        return await _tavily_search(node, query, settings)
+        if node.tool_name != "tavily_search":
+            # Better to stop than let an unimplemented tool look like it worked.
+            raise ToolError(
+                f"node '{node.id}': no client implemented for tool '{node.tool_name}'"
+            )
 
-    # Better to stop than to let an unimplemented tool look like it worked.
-    raise ToolError(
-        f"node '{node.id}': no client implemented for tool '{node.tool_name}'"
-    )
+        try:
+            text, latency_ms = await _tavily_search(node, query, settings)
+        except ToolError as exc:
+            fail(active, exc)
+            raise
+        record(
+            active,
+            **{
+                "synapse.tool.simulated": False,
+                "synapse.tool.latency_ms": latency_ms,
+                "synapse.tool.result_count": len(json.loads(text).get("results", [])),
+            },
+        )
+        return text, latency_ms
 
 
 async def _tavily_search(
@@ -61,7 +85,6 @@ async def _tavily_search(
 
     # The node's declared params steer the search; the run's query is the subject.
     body = {
-        "api_key": key,
         "query": f"{query} {node.system_prompt}".strip(),
         "max_results": int(node.params.get("max_results", 5)),
         "search_depth": str(node.params.get("search_depth", "basic")),
@@ -70,7 +93,11 @@ async def _tavily_search(
     started = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=TOOL_TIMEOUT_S) as client:
-            response = await client.post(TAVILY_URL, json=body)
+            # Bearer rather than the legacy api_key-in-body: the credential
+            # stays out of the request body, and out of anything that logs one.
+            response = await client.post(
+                TAVILY_URL, json=body, headers={"Authorization": f"Bearer {key}"}
+            )
             response.raise_for_status()
             payload = response.json()
     except httpx.HTTPStatusError as exc:

@@ -53,15 +53,26 @@
       }
     },
     {
-      "id": "node_synthesize_report",
+      "id": "node_draft_findings",
       "type": "llm_agent",
-      "persona": "Executive Briefing Synthesizer",
-      "system_prompt": "Synthesize regulatory, sentiment, and macro findings into a brief.",
+      "persona": "Research Draftsman",
+      "system_prompt": "Consolidate the regulatory, sentiment and macro findings into terse analytical bullet points. Do not editorialise.",
       "model": "openai/qwen2.5-3b-instruct",
       "dependencies": [
         "node_search_filings",
         "node_search_sentiment",
         "node_search_macro"
+      ],
+      "params": {}
+    },
+    {
+      "id": "node_synthesize_report",
+      "type": "llm_agent",
+      "persona": "Executive Briefing Synthesizer",
+      "system_prompt": "Rewrite the drafted findings as a decision-ready executive brief.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [
+        "node_draft_findings"
       ],
       "params": {}
     }

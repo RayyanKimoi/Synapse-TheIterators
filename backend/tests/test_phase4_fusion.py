@@ -159,13 +159,31 @@ def test_a_tool_breaks_the_chain() -> None:
     assert _groups(_workflow(nodes)) == {}
 
 
-def test_the_reference_workflow_has_nothing_to_fuse() -> None:
-    """LLM -> tools -> LLM. No adjacent LLM pair exists, so fusion claims no
-    gain here -- which is why removing the 0.55 multiplier raised this
-    workflow's projected latency instead of lowering it."""
+def test_the_reference_workflow_fuses_its_reasoning_pair() -> None:
+    """The demo workflow drafts findings and then writes the brief. That pair is
+    private and read-only, so it is exactly one request."""
     workflow = registry.get("wf_deep_research_v1")
     assert workflow is not None
-    assert _groups(workflow) == {}
+    groups = _groups(workflow)
+    assert groups["node_draft_findings"].members == (
+        "node_draft_findings",
+        "node_synthesize_report",
+    )
+
+
+def test_a_fused_terminal_node_keeps_its_declared_output_schema() -> None:
+    """Flattening the sink to one field would silently break the IR contract:
+    the merged signature has to carry `required_output_keys` themselves."""
+    workflow = registry.get("wf_deep_research_v1")
+    assert workflow is not None
+    group = _groups(workflow)["node_draft_findings"]
+    required = tuple(workflow.test_assertions.required_output_keys)
+    assert group.fields["node_synthesize_report"] == required
+    assert group.fields["node_draft_findings"] == ("node_draft_findings",)
+    # The gateway is asked for every field across both members.
+    assert signature_spec(group) == (
+        "query, context -> node_draft_findings, " + ", ".join(required)
+    )
 
 
 # --- the DSPy signature ----------------------------------------------------
@@ -190,7 +208,9 @@ def test_field_names_survive_ids_that_are_not_identifiers() -> None:
     group = _groups(
         _workflow([_agent("node.draft-1", []), _agent("node.polish-2", ["node.draft-1"])])
     )["node.draft-1"]
-    assert all(field.isidentifier() for field in group.fields.values())
+    assert all(
+        name.isidentifier() for names in group.fields.values() for name in names
+    )
 
 
 # --- execution -------------------------------------------------------------
@@ -354,7 +374,20 @@ def test_the_planner_reports_a_fusion_candidate_with_real_savings() -> None:
 
 
 def test_the_planner_reports_no_fusion_candidate_when_nothing_is_fusable() -> None:
-    workflow = registry.get("wf_deep_research_v1")
-    assert workflow is not None
-    kinds = {c.kind for c in compile_workflow(workflow).optimization_candidates}
+    """A chain broken by a tool offers nothing to merge."""
+    broken = _workflow(
+        [
+            _agent("draft", []),
+            {
+                "id": "fetch",
+                "type": "tool_io",
+                "persona": "Crawler",
+                "system_prompt": "Fetch.",
+                "tool_name": "tavily_search",
+                "dependencies": ["draft"],
+            },
+            _agent("polish", ["fetch"]),
+        ]
+    )
+    kinds = {c.kind for c in compile_workflow(broken).optimization_candidates}
     assert "prompt_fusion" not in kinds

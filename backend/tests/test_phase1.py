@@ -41,7 +41,7 @@ def _collect(**kwargs) -> list[tuple[str, dict]]:
 
 
 def test_reference_workflow_loads(workflow: WorkflowIR) -> None:
-    assert len(workflow.nodes) == 5
+    assert len(workflow.nodes) == 6
     assert workflow.schema_url is not None  # "$schema" alias is accepted
     assert workflow.test_assertions.min_semantic_similarity == 0.95
 
@@ -87,23 +87,21 @@ def test_topological_tiers_partition_independent_nodes(workflow: WorkflowIR) -> 
     assert plan.execution_tiers == [
         ["node_extract_entities"],
         ["node_search_filings", "node_search_sentiment", "node_search_macro"],
+        ["node_draft_findings"],
         ["node_synthesize_report"],
     ]
-    assert plan.max_depth == 2
-    assert plan.edge_count == 6
+    assert plan.max_depth == 3
+    assert plan.edge_count == 7
 
 
 def test_compiled_plan_beats_baseline(workflow: WorkflowIR) -> None:
     plan = compile_workflow(workflow)
     assert plan.compiled_estimate.latency_ms < plan.baseline_estimate.latency_ms
-    # Parallelism alone, with no history and nothing fusable: 45.7%. The 0.55
-    # mock used to inflate this past 50%. PASTE takes the warm figure to 57.9%
-    # (see test_phase3_paste.py).
     assert plan.latency_reduction_pct > 40.0
     kinds = {candidate.kind for candidate in plan.optimization_candidates}
-    # Ready-Node parallelism is all this workflow offers a cold compiler: it has
-    # no adjacent LLM pair to fuse, and with no history PASTE cannot speculate.
-    assert kinds == {"parallelize"}
+    # A cold compiler sees parallelism and the fusable draft -> synthesize pair.
+    # PASTE needs history, so it contributes nothing until the matrix is warm.
+    assert kinds == {"parallelize", "prompt_fusion"}
 
 
 def test_cycle_is_rejected() -> None:
@@ -139,7 +137,8 @@ def test_cycle_is_rejected() -> None:
 def test_depths_follow_longest_path(workflow: WorkflowIR) -> None:
     depths = topological_depths(build_graph(workflow))
     assert depths["node_extract_entities"] == 0
-    assert depths["node_synthesize_report"] == 2
+    assert depths["node_draft_findings"] == 2
+    assert depths["node_synthesize_report"] == 3
 
 
 # --- telemetry stream ------------------------------------------------------
@@ -262,7 +261,7 @@ def test_health_and_workflow_listing() -> None:
 def test_compile_endpoint(workflow: WorkflowIR) -> None:
     response = client.post("/api/v1/compile", json=workflow.model_dump(by_alias=True))
     assert response.status_code == 200
-    assert len(response.json()["execution_tiers"]) == 3
+    assert len(response.json()["execution_tiers"]) == 4
 
 
 def test_compile_endpoint_rejects_cycle() -> None:

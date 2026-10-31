@@ -34,6 +34,7 @@ from functools import lru_cache
 from typing import Any
 
 from ..config import Settings, get_settings
+from ..observability import record, span
 from ..models.ir import NodeType, WorkflowNode
 
 logger = logging.getLogger(__name__)
@@ -205,23 +206,35 @@ class SemanticCache:
         second round of embedding.
         """
         started = time.perf_counter()
-        vectors = await self._embed_pair(query, context)
+        with span("cache.probe", **{"synapse.cache.threshold": self.threshold}) as active:
+            vectors = await self._embed_pair(query, context)
 
-        best_score = 0.0
-        best_text: str | None = None
-        for stored, text in await self._entries(namespace):
-            score = _pair_similarity(stored, vectors)
-            if score > best_score:
-                best_score, best_text = score, text
+            best_score = 0.0
+            best_text: str | None = None
+            for stored, text in await self._entries(namespace):
+                score = _pair_similarity(stored, vectors)
+                if score > best_score:
+                    best_score, best_text = score, text
 
-        if best_text is None or best_score < self.threshold:
-            return vectors, None
-        return vectors, CacheHit(
-            text=best_text,
-            similarity=round(min(best_score, 1.0), 4),
-            latency_ms=int((time.perf_counter() - started) * 1000),
-            backend=self.backend,
-        )
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            admitted = best_text is not None and best_score >= self.threshold
+            record(
+                active,
+                **{
+                    "synapse.cache.backend": self.backend,
+                    "synapse.cache.hit": admitted,
+                    "synapse.cache.best_similarity": round(best_score, 4),
+                    "synapse.cache.latency_ms": latency_ms,
+                },
+            )
+            if not admitted:
+                return vectors, None
+            return vectors, CacheHit(
+                text=best_text or "",
+                similarity=round(min(best_score, 1.0), 4),
+                latency_ms=latency_ms,
+                backend=self.backend,
+            )
 
     async def store(
         self,

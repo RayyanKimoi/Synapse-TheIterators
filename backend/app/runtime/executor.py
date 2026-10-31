@@ -42,6 +42,8 @@ from ..models.ir import NodeType, WorkflowIR, WorkflowNode
 from .contract import extract_json_object
 from .fusion import FusionGroup, fused_system_prompt
 from .fusion import response_keys as fusion_response_keys
+from .fusion import slice_for
+from ..observability import fail, record, span
 from .tools import ToolError, run_tool
 from .profile import NodeWork, node_latency_ms
 
@@ -107,6 +109,38 @@ class NodeExecutor:
         self.outcomes: dict[str, NodeOutcome] = {}
 
     async def __call__(self, node_id: str) -> int:
+        with span(
+            f"node {node_id}",
+            **{
+                "synapse.node.id": node_id,
+                "synapse.node.type": self.nodes[node_id].type.value,
+                "synapse.pipeline": self.scope,
+            },
+        ) as active:
+            try:
+                duration = await self._execute(node_id)
+            except HaltBranch as halt:
+                fail(active, halt)
+                raise
+            outcome = self.outcomes.get(node_id)
+            record(
+                active,
+                **{
+                    "synapse.node.duration_ms": duration,
+                    "synapse.node.source": outcome.source if outcome else None,
+                    "synapse.node.tokens": outcome.tokens if outcome else None,
+                    "synapse.node.cost_usd": outcome.cost_usd if outcome else None,
+                    "synapse.cache.hit": outcome.cache_hit if outcome else None,
+                    "synapse.cache.similarity": (
+                        outcome.cache_similarity if outcome else None
+                    ),
+                    "synapse.budget.spent_usd": self.budget.spent_usd,
+                    "synapse.budget.tripped": self.budget.tripped,
+                },
+            )
+            return duration
+
+    async def _execute(self, node_id: str) -> int:
         node = self.nodes[node_id]
         if self.prime and node_id in self.sinks:
             # Priming deliberately leaves the terminal node cold, so the warm
@@ -130,7 +164,15 @@ class NodeExecutor:
         group = self.fusion.get(node_id)
         if node.type is NodeType.TOOL_IO:
             outcome, duration = await self._run_tool(node)
-        elif group is not None and group.leader not in self._fusion_failed:
+        elif (
+            group is not None
+            and group.leader not in self._fusion_failed
+            # A follower may only take the fused path when its slice is really
+            # waiting. If the leader was served from cache it never made the
+            # merged call, so there is nothing to collect and the follower has
+            # to earn its own answer.
+            and (node_id == group.leader or node_id in self._fused_slices)
+        ):
             outcome, duration = await self._run_fused(node, _joined(question, context))
         else:
             outcome, duration = await self._run_llm(node, _joined(question, context))
@@ -158,8 +200,9 @@ class NodeExecutor:
         """
         group = self.fusion[node.id]
         if node.id != group.leader:
-            slice_text = self._fused_slices.pop(node.id, "")
-            return NodeOutcome(node.id, slice_text, "fused_follower"), 0
+            return NodeOutcome(
+                node.id, self._fused_slices.pop(node.id), "fused_follower"
+            ), 0
 
         planned = self.plan[node.id]
         self._speculate(node)
@@ -190,7 +233,9 @@ class NodeExecutor:
         unfilled = [
             member
             for member in group.members
-            if not str(merged.get(group.fields[member], "")).strip()
+            if any(
+                not str(merged.get(name, "")).strip() for name in group.fields[member]
+            )
         ]
         if unfilled:
             # The model did not honour the merged contract -- a dropped closing
@@ -206,9 +251,9 @@ class NodeExecutor:
             self._fusion_failed.add(group.leader)
             return await self._run_llm(node, prompt)
 
-        for member, field in group.fields.items():
+        for member, fields in group.fields.items():
             if member != node.id:
-                self._fused_slices[member] = str(merged[field])
+                self._fused_slices[member] = slice_for(merged, fields)
 
         if result.source == "mock":
             await self._simulate(planned.duration_ms - result.latency_ms)
@@ -219,7 +264,7 @@ class NodeExecutor:
         return (
             NodeOutcome(
                 node.id,
-                str(merged[group.fields[node.id]]),
+                slice_for(merged, group.fields[node.id]),
                 # The raw gateway source, so `llm_calls` still counts the one
                 # request the group made. `fused_follower` is what marks the
                 # calls fusion removed.

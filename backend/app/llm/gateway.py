@@ -30,6 +30,7 @@ from typing import Literal
 import httpx
 
 from ..config import Settings, get_settings
+from ..observability import fail, record, span
 from ..models.ir import WorkflowIR
 from ..runtime.profile import COST_PER_TOKEN_USD
 
@@ -159,22 +160,46 @@ class LLMGateway:
             budget.reserve(reserved)
 
         started = time.perf_counter()
-        try:
-            if self.settings.llm_offline_mode:
-                result = self._mock(prompt, system_prompt, model, response_keys, started)
-            else:
-                result = await self._dispatch(
-                    prompt, system_prompt, model, max_tokens, response_keys, started
-                )
-        except BaseException:
-            # Cancelled mid-flight (e.g. the SSE client disconnected): release the hold.
-            if budget is not None:
-                budget.settle(reserved, 0.0)
-            raise
+        with span(
+            "llm.completion",
+            **{
+                "gen_ai.request.model": model,
+                "gen_ai.request.max_tokens": max_tokens,
+                "synapse.budget.reserved_usd": reserved,
+                "synapse.response_keys": ",".join(response_keys or []),
+            },
+        ) as active:
+            try:
+                if self.settings.llm_offline_mode:
+                    result = self._mock(
+                        prompt, system_prompt, model, response_keys, started
+                    )
+                else:
+                    result = await self._dispatch(
+                        prompt, system_prompt, model, max_tokens, response_keys, started
+                    )
+            except BaseException as exc:
+                # Cancelled mid-flight (the SSE client disconnected), or the
+                # model was unreachable: release the hold either way.
+                fail(active, exc)
+                if budget is not None:
+                    budget.settle(reserved, 0.0)
+                raise
 
-        if budget is not None:
-            budget.settle(reserved, result.cost_usd)
-        return result
+            if budget is not None:
+                budget.settle(reserved, result.cost_usd)
+            record(
+                active,
+                **{
+                    "gen_ai.usage.total_tokens": result.tokens_consumed,
+                    "gen_ai.response.model": result.model,
+                    "synapse.llm.source": result.source,
+                    "synapse.llm.cost_usd": result.cost_usd,
+                    "synapse.llm.latency_ms": result.latency_ms,
+                    "synapse.llm.fallback_reason": result.fallback_reason,
+                },
+            )
+            return result
 
     async def _dispatch(
         self,
