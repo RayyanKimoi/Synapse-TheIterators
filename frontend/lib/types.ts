@@ -51,6 +51,8 @@ export type WorkflowNode = {
   tool_name: string | null;
   dependencies: string[];
   params: Record<string, unknown>;
+  /** Node changes state elsewhere: excluded from prompt fusion and prefetching. */
+  side_effect: boolean;
 };
 
 export type WorkflowIR = {

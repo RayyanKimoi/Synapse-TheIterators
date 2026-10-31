@@ -7,6 +7,8 @@ import time
 
 import pytest
 
+from pydantic import ValidationError
+
 from app import registry
 from app.config import Settings
 from app.llm.cache import (
@@ -14,9 +16,10 @@ from app.llm.cache import (
     TOOL_TTL_S,
     SemanticCache,
     embed,
+    node_namespace,
     ttl_for,
 )
-from app.models.ir import NodeType, WorkflowIR
+from app.models.ir import NodeType, WorkflowIR, WorkflowNode
 from app.models.telemetry import NodeStatus, PipelineType
 from app.runtime.runner import stream_telemetry
 
@@ -30,8 +33,7 @@ def workflow() -> WorkflowIR:
 
 @pytest.fixture
 def cache() -> SemanticCache:
-    # No Redis configured in tests, so this exercises the in-memory fallback.
-    return SemanticCache(Settings())
+    return SemanticCache(Settings(), use_redis=False)
 
 
 def _run(workflow: WorkflowIR, **kwargs) -> list[tuple[str, dict]]:
@@ -45,6 +47,88 @@ def _run(workflow: WorkflowIR, **kwargs) -> list[tuple[str, dict]]:
 
 
 # --- vector math -----------------------------------------------------------
+
+
+def test_the_real_encoder_is_in_use_not_the_hashed_fallback() -> None:
+    """all-MiniLM-L6-v2 is 384-dimensional; the fallback is 256. Shipping on the
+    fallback would silently disable paraphrase matching, so assert the real one."""
+    assert len(asyncio.run(embed("probe"))) == 384
+
+
+def test_a_paraphrased_question_is_served_from_cache(cache: SemanticCache) -> None:
+    """The point of a semantic cache over an exact-match one. Only the real
+    encoder can do this; hashed bag-of-words shares no tokens here."""
+
+    async def scenario():
+        vectors, _ = await cache.probe(
+            "n", query="NVIDIA supply chain risk", context="shared context"
+        )
+        await cache.store(
+            "n",
+            query="NVIDIA supply chain risk",
+            context="shared context",
+            text="nvidia brief",
+            vectors=vectors,
+            ttl_s=60,
+        )
+        return await cache.probe(
+            "n", query="supply chain risks for NVIDIA", context="shared context"
+        )
+
+    _, hit = asyncio.run(scenario())
+    assert hit is not None
+    assert hit.text == "nvidia brief"
+    # Close, but not the identical prompt: a measured value, not a constant.
+    assert cache.threshold <= hit.similarity < 1.0
+
+
+# --- pre-flight validation -------------------------------------------------
+
+
+def _node(**overrides) -> WorkflowNode:
+    base = {
+        "id": "n",
+        "type": NodeType.TOOL_IO,
+        "persona": "Crawler",
+        "system_prompt": "Fetch filings.",
+        "tool_name": "tavily_search",
+        "params": {"index": 0},
+    }
+    return WorkflowNode.model_validate(base | overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"system_prompt": "Fetch something else."},
+        {"params": {"index": 1}},
+        {"tool_name": "other_search"},
+        {"side_effect": True},
+        {"id": "other_node"},
+    ],
+    ids=["system_prompt", "params", "tool", "side_effect", "node_id"],
+)
+def test_changing_any_validated_dimension_makes_an_entry_unreachable(
+    overrides: dict,
+) -> None:
+    """Vector similarity decides whether the question is close enough. These
+    dimensions are not negotiable: a different prompt or parameter means the
+    stored answer is no longer this node's answer."""
+    assert node_namespace("compiled", _node()) != node_namespace(
+        "compiled", _node(**overrides)
+    )
+
+
+def test_the_same_node_keeps_one_namespace_across_runs() -> None:
+    assert node_namespace("compiled", _node()) == node_namespace("compiled", _node())
+    # ...but the two racing pipelines never share it.
+    assert node_namespace("compiled", _node()) != node_namespace("baseline", _node())
+
+
+def test_a_model_version_bump_invalidates_cached_reasoning() -> None:
+    old = _node(type=NodeType.LLM_AGENT, model="ollama/qwen2.5-7b", tool_name=None)
+    new = _node(type=NodeType.LLM_AGENT, model="ollama/qwen3-8b", tool_name=None)
+    assert node_namespace("compiled", old) != node_namespace("compiled", new)
 
 
 def test_embeddings_are_unit_length_and_deterministic() -> None:
@@ -128,17 +212,24 @@ def test_namespaces_are_isolated(cache: SemanticCache) -> None:
 
 
 def test_the_threshold_comes_from_settings() -> None:
-    strict = SemanticCache(Settings(semantic_cache_similarity_threshold=0.99))
-    assert strict.threshold == 0.99
-    assert SemanticCache(Settings()).threshold == 0.88
+    strict = Settings(semantic_cache_similarity_threshold=0.90)
+    assert SemanticCache(strict, use_redis=False).threshold == 0.90
+    assert SemanticCache(Settings(), use_redis=False).threshold == 0.88
+
+
+def test_the_threshold_is_held_inside_the_prd_cosine_band() -> None:
+    for outside in (0.5, 0.84, 0.91, 1.0):
+        with pytest.raises(ValidationError):
+            Settings(semantic_cache_similarity_threshold=outside)
 
 
 def test_a_near_match_is_refused_above_its_score() -> None:
     """One shared token out of three scores well under 0.88, and a cache that is
     configured to accept anything will serve it. The threshold is the only thing
     standing between the two outcomes."""
-    loose = SemanticCache(Settings(semantic_cache_similarity_threshold=0.1))
-    strict = SemanticCache(Settings())
+    loose = SemanticCache(Settings(), use_redis=False)
+    loose.threshold = 0.1  # below the configurable band, to prove the gate acts
+    strict = SemanticCache(Settings(), use_redis=False)
 
     async def scenario(target: SemanticCache):
         vectors, _ = await target.probe("n", query="alpha beta gamma", context="")
@@ -185,7 +276,7 @@ def test_an_expired_entry_is_not_served_and_is_evicted(cache: SemanticCache) -> 
 
 def test_an_unreachable_redis_degrades_to_memory(cache: SemanticCache) -> None:
     """Port 1 refuses connections, so the ping fails and the cache still works."""
-    offline = SemanticCache(Settings(redis_port=1))
+    offline = SemanticCache(Settings(redis_port=1))  # nothing listens on port 1
 
     async def scenario():
         vectors, _ = await offline.probe("n", query="q", context="c")
@@ -241,12 +332,15 @@ def test_cached_nodes_report_measured_similarity_and_no_spend(
     workflow: WorkflowIR,
 ) -> None:
     frame = _run(workflow, cache_warm=True)[-2][1]
-    states = frame["node_states"]
-    assert all(state["status"] == NodeStatus.CACHED.value for state in states.values())
+    cached = [s for s in frame["node_states"].values() if s["is_cache_hit"]]
+    assert len(cached) == len(workflow.nodes) - 1  # the sink is left cold
     assert all(
-        state["is_cache_hit"] and state["tokens_consumed"] == 0 and state["cost_usd"] == 0
-        for state in states.values()
+        state["status"] == NodeStatus.CACHED.value
+        and state["tokens_consumed"] == 0
+        and state["cost_usd"] == 0
+        for state in cached
     )
+    # Every hit repeated its primed prompt exactly, so the weakest is still 1.0.
     assert frame["contract"]["semantic_invariance"] == 1.0
 
 

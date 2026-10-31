@@ -34,13 +34,17 @@ from functools import lru_cache
 from typing import Any
 
 from ..config import Settings, get_settings
-from ..models.ir import NodeType
+from ..models.ir import NodeType, WorkflowNode
 
 logger = logging.getLogger(__name__)
 
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 KEY_PREFIX = "synapse:sc"
 FALLBACK_DIMS = 256
+# Without an explicit timeout a blackholed Redis port does not refuse the
+# connection, it hangs on the OS default (~21s on Windows) -- long enough to
+# stall the first request of a demo while the cache decides it has no backend.
+REDIS_TIMEOUT_S = 1.5
 # A root node has no upstream context. Embedding a constant rather than "" keeps
 # two empty contexts scoring 1.0 against each other instead of 0.0.
 EMPTY_CONTEXT = "[no upstream context]"
@@ -108,14 +112,24 @@ async def _load_embedder() -> None:
             _embedder_ready = True
 
 
-async def embed(text: str) -> Vector:
+async def embed_many(texts: list[str]) -> list[Vector]:
+    """One encoder invocation for the whole batch.
+
+    Batching matters: a probe needs the query and the context vector, and two
+    separate calls cost twice the model overhead -- enough to push a cache hit
+    past the latency it exists to avoid.
+    """
     if not _embedder_ready:
         await _load_embedder()
     if _embedder is None:
-        return _hash_vector(text)
+        return [_hash_vector(text) for text in texts]
     # fastembed is synchronous CPU work: off the event loop it goes.
-    vectors = await asyncio.to_thread(lambda: list(_embedder.embed([text])))
-    return _normalize([float(value) for value in vectors[0]])
+    vectors = await asyncio.to_thread(lambda: list(_embedder.embed(texts)))
+    return [_normalize([float(value) for value in vector]) for vector in vectors]
+
+
+async def embed(text: str) -> Vector:
+    return (await embed_many([text]))[0]
 
 
 def _cosine(left: Vector, right: Vector) -> float:
@@ -136,17 +150,45 @@ def _digest(text: str) -> str:
     return hashlib.blake2b(text.encode(), digest_size=8).hexdigest()
 
 
+def node_namespace(scope: str, node: WorkflowNode) -> str:
+    """Pre-flight validation, enforced as key separation.
+
+    An entry is only reachable when the model, the system prompt and the tool
+    parameters are byte-identical to the ones that produced it. Vector
+    similarity decides whether the *question* is close enough; these are the
+    dimensions where close enough is simply wrong -- a new model version or an
+    edited system prompt means the stored answer is no longer that node's
+    answer. `scope` separates the two racing pipelines.
+    """
+    fingerprint = _digest(
+        json.dumps(
+            {
+                "model": node.model,
+                "tool": node.tool_name,
+                "system_prompt": node.system_prompt,
+                "params": node.params,
+                "side_effect": node.side_effect,
+            },
+            sort_keys=True,
+            default=str,
+        )
+    )
+    return f"{scope}|{node.id}|{fingerprint}"
+
+
 class SemanticCache:
     """Per-namespace vector store. One namespace per node, so a cached answer
     can never be served for a different node's question."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, *, use_redis: bool = True) -> None:
         self.settings = settings or get_settings()
         self.threshold = self.settings.semantic_cache_similarity_threshold
         # namespace -> digest -> (expires_at, vectors, text)
         self._memory: dict[str, dict[str, tuple[float, Vectors, str]]] = {}
         self._redis: Any = None
-        self._probed = False
+        # `use_redis=False` skips the connection probe for a caller that already
+        # knows there is no server, rather than paying its timeout to find out.
+        self._probed = not use_redis
 
     @property
     def backend(self) -> str:
@@ -205,7 +247,8 @@ class SemanticCache:
             self._degrade(exc)
 
     async def _embed_pair(self, query: str, context: str) -> Vectors:
-        return (await embed(query), await embed(context or EMPTY_CONTEXT))
+        query_vector, context_vector = await embed_many([query, context or EMPTY_CONTEXT])
+        return query_vector, context_vector
 
     async def _entries(self, namespace: str) -> list[tuple[Vectors, str]]:
         client = await self._client()
@@ -255,6 +298,8 @@ class SemanticCache:
                 host=self.settings.redis_host,
                 port=self.settings.redis_port,
                 decode_responses=True,
+                socket_connect_timeout=REDIS_TIMEOUT_S,
+                socket_timeout=REDIS_TIMEOUT_S,
             )
             await client.ping()
         except Exception as exc:

@@ -158,15 +158,21 @@ def test_compiled_stream_is_faster_than_baseline(workflow: WorkflowIR) -> None:
     assert 6_000 <= compiled["total_elapsed_ms"] <= 11_000
 
 
-def test_warm_cache_run_is_sub_second_and_free(workflow: WorkflowIR) -> None:
-    summary = _collect(
-        workflow=workflow, mode=PipelineType.COMPILED, cache_warm=True
-    )[-1][1]
-    # Priming ran the whole graph, so every node is now served from vectors.
-    assert summary["cache_hits"] == len(workflow.nodes)
-    assert summary["total_elapsed_ms"] < 1_000
-    assert summary["aggregate_metrics"]["total_tokens"] == 0
-    assert summary["aggregate_metrics"]["total_cost_usd"] == 0
+def test_warm_cache_run_collapses_latency_but_keeps_a_finish_line(
+    workflow: WorkflowIR,
+) -> None:
+    events = _collect(workflow=workflow, mode=PipelineType.COMPILED, cache_warm=True)
+    summary = events[-1][1]
+    states = events[-2][1]["node_states"]
+
+    # Priming warms everything upstream of the answer and leaves the terminal
+    # node cold, so the arena still has real work to animate.
+    assert summary["cache_hits"] == len(workflow.nodes) - 1
+    assert states["node_synthesize_report"]["status"] == NodeStatus.COMPLETED.value
+    # A fully cached run would report 0 ms, which divides badly in the DOM
+    # stopwatches downstream.
+    assert summary["total_elapsed_ms"] > 0
+    assert summary["total_elapsed_ms"] < 4_000  # cold compiled is ~8.8 s
     assert summary["aggregate_metrics"]["projected_cost_saved_usd"] > 0
 
 
@@ -174,7 +180,10 @@ def test_cached_nodes_report_zero_tokens(workflow: WorkflowIR) -> None:
     events = _collect(workflow=workflow, mode=PipelineType.COMPILED, cache_warm=True)
     states = events[-2][1]["node_states"]
     cached = [s for s in states.values() if s["status"] == NodeStatus.CACHED.value]
-    assert cached and all(s["tokens_consumed"] == 0 and s["latency_ms"] <= 5 for s in cached)
+    assert len(cached) == len(workflow.nodes) - 1
+    assert all(s["tokens_consumed"] == 0 and s["cost_usd"] == 0 for s in cached)
+    # A hit is an embed plus a dot product; the call it replaces is seconds.
+    assert all(s["latency_ms"] < 100 for s in cached)
 
 
 def test_telemetry_is_deterministic(workflow: WorkflowIR) -> None:

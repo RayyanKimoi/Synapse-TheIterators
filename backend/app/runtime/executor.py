@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import networkx as nx
 
 from ..compiler.scheduler import HaltBranch
-from ..llm.cache import SemanticCache, ttl_for
+from ..llm.cache import SemanticCache, node_namespace, ttl_for
 from ..llm.gateway import BudgetExceededError, LLMGateway, RunBudget
 from ..models.ir import NodeType, WorkflowIR, WorkflowNode
 from .profile import NodeWork
@@ -61,7 +61,9 @@ class NodeExecutor:
         budget: RunBudget,
         query: str,
         time_scale: float,
+        prime: bool = False,
     ) -> None:
+        self.prime = prime
         self.nodes = workflow.node_map()
         self.plan = plan
         self.gateway = gateway
@@ -76,8 +78,13 @@ class NodeExecutor:
 
     async def __call__(self, node_id: str) -> int:
         node = self.nodes[node_id]
+        if self.prime and node_id in self.sinks:
+            # Priming deliberately leaves the terminal node cold, so the warm
+            # run still has real work to finish on and a non-zero clock.
+            return 0
+
         question, context = self._prompt_parts(node)
-        namespace = f"{self.scope}|{node_id}|{node.model or node.tool_name}"
+        namespace = node_namespace(self.scope, node)
 
         vectors, hit = await self.cache.probe(namespace, query=question, context=context)
         if hit is not None:

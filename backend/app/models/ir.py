@@ -26,6 +26,11 @@ class WorkflowNode(BaseModel):
     tool_name: str | None = None
     dependencies: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
+    # Declares that running this node changes state somewhere else: a write, a
+    # purchase, a notification. Prompt fusion refuses to merge across one, and
+    # speculative pre-fetching refuses to fire one early, because both would
+    # execute it more often than the workflow asked for.
+    side_effect: bool = False
 
     @model_validator(mode="after")
     def _check_type_contract(self) -> "WorkflowNode":

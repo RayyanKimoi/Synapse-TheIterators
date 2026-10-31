@@ -328,6 +328,10 @@ async def _prime_cache(
     run before, so run it once -- with the simulated latency collapsed -- and
     let the measured run find the vectors it left behind.
 
+    Terminal nodes are left out: the arena needs a visible finish line, and a
+    fully cached run would report a zero-millisecond clock. Everything upstream
+    of the answer is warm; composing the answer itself is still real work.
+
     Priming carries its own unlimited budget: the breaker belongs to the run
     being measured, not to the history behind it.
     """
@@ -341,6 +345,7 @@ async def _prime_cache(
             cache=cache,
             scope=scope,
             budget=RunBudget(limit_usd=math.inf),
+            prime=True,
             query=query,
             time_scale=PRIME_TIME_SCALE,
         ),

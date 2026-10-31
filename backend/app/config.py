@@ -23,9 +23,12 @@ class Settings(BaseSettings):
 
     redis_host: str = "localhost"
     redis_port: int = 6379
-    # Cosine floor for serving a cached response (PRD band 0.85-0.90). Distinct
-    # from the IR's min_semantic_similarity (0.95), the output-invariance gate.
-    semantic_cache_similarity_threshold: float = Field(default=0.88, gt=0.0, le=1.0)
+    # Cosine floor for serving a cached response. Held inside the PRD's
+    # 0.85-0.90 band: below it the cache answers questions it was not asked,
+    # above it paraphrases stop matching and the cache stops earning its keep.
+    # Distinct from the IR's min_semantic_similarity (0.95), which is the
+    # output-invariance gate, not an admission threshold.
+    semantic_cache_similarity_threshold: float = Field(default=0.88, ge=0.85, le=0.90)
     semantic_cache_ttl_seconds: int = 3600
 
     # Deployment ceiling: a workflow's budget_limit_usd is clamped to this.
