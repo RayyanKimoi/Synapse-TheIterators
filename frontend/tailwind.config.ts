@@ -10,7 +10,15 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ["var(--font-sans)"],
+        head: ["var(--font-head)"],
+        serif: ["var(--font-serif)"],
+        display: ["var(--font-display)"],
+      },
       colors: {
+        void: "hsl(var(--void))",
+        stream: "hsl(var(--stream))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         card: {
