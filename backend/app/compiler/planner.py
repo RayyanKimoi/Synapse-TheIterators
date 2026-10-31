@@ -95,6 +95,50 @@ def dispatch_groups(graph: nx.DiGraph) -> list[list[str]]:
     return groups
 
 
+def nodes_denied_concurrency(
+    graph: nx.DiGraph, disabled: frozenset[str]
+) -> frozenset[str]:
+    """Members of every dispatch group whose `parallelize` pass was rejected.
+
+    Serialising dispatch is not enough on its own: PASTE speculates a tool the
+    moment its parent starts generating, so the requests still go out together
+    and rejecting parallelism would change nothing measurable. Concurrent
+    network calls are concurrency, so a group denied it is denied speculation
+    too.
+    """
+    if not disabled:
+        return frozenset()
+    return frozenset(
+        node
+        for index, group in enumerate(dispatch_groups(graph))
+        if f"opt_parallelize_{index}" in disabled
+        for node in group
+    )
+
+
+def graph_without_rejected_parallelism(
+    graph: nx.DiGraph, disabled: frozenset[str]
+) -> nx.DiGraph:
+    """Serialise every dispatch group whose `parallelize` pass was rejected.
+
+    Rejecting parallelism cannot be expressed by removing something; it has to
+    be expressed by adding the dependency the developer is asserting. Chaining
+    the group's members forces the Ready-Node scheduler to release them one at
+    a time, which is exactly what declining the pass means. Members of a
+    dispatch group are siblings and independent by construction, so chaining
+    them can never introduce a cycle.
+    """
+    if not disabled:
+        return graph
+    serialised = graph.copy()
+    for index, group in enumerate(dispatch_groups(graph)):
+        if f"opt_parallelize_{index}" not in disabled:
+            continue
+        for before, after in zip(group, group[1:]):
+            serialised.add_edge(before, after)
+    return serialised
+
+
 def _candidates(
     workflow: WorkflowIR,
     graph: nx.DiGraph,

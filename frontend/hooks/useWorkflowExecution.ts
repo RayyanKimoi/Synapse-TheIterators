@@ -9,6 +9,8 @@ import { useTelemetryStore } from "@/store/useTelemetryStore";
 export type RunOptions = {
   cacheWarm?: boolean;
   timeScale?: number;
+  /** Optimization candidate ids the developer rejected in the Matchmaker. */
+  disabled?: string[];
 };
 
 /**
@@ -44,6 +46,7 @@ export function useWorkflowExecution(workflowId: string | null) {
           mode: pipeline,
           cacheWarm: options.cacheWarm,
           timeScale: options.timeScale,
+          disabled: options.disabled,
         }),
       );
 

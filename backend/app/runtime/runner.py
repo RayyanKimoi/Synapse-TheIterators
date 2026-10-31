@@ -24,6 +24,10 @@ from typing import get_args
 import networkx as nx
 
 from ..compiler.dag import assert_acyclic, baseline_sequence, build_graph
+from ..compiler.planner import (
+    graph_without_rejected_parallelism,
+    nodes_denied_concurrency,
+)
 from ..compiler.scheduler import NodeTiming, ready_node_timings, run_ready_nodes
 from ..config import Settings, get_settings
 from ..llm.cache import SemanticCache, get_cache
@@ -152,6 +156,7 @@ async def stream_telemetry(
     query: str | None = None,
     cache: SemanticCache | None = None,
     matrix: TransitionMatrix | None = None,
+    disabled: frozenset[str] = frozenset(),
 ) -> AsyncIterator[dict[str, str]]:
     """Yield sse-starlette event dicts until the run completes.
 
@@ -177,8 +182,21 @@ async def stream_telemetry(
         if compiled
         else frozenset()
     )
+    # A pass the developer swiped left on is not applied. The Matchmaker is a
+    # control surface, so a rejection has to change what actually runs.
+    serial_only = nodes_denied_concurrency(graph, disabled)
+    prefetch = frozenset(
+        node
+        for node in prefetch
+        if f"opt_prefetch_{node}" not in disabled and node not in serial_only
+    )
     # Fusion is a compiler pass, so the unoptimised baseline does not get it.
     fusion = plan_fusion(workflow, graph) if compiled else {}
+    fusion = {
+        member: group
+        for member, group in fusion.items()
+        if f"opt_fusion_{group.leader}" not in disabled
+    }
     plan = build_node_work(
         workflow, graph, compiled=compiled, prefetch=prefetch, fusion=fusion
     )
@@ -210,7 +228,7 @@ async def stream_telemetry(
     # Compiled dispatches over the real DAG; baseline over a chain of the same
     # nodes, so the only difference between the two runs is graph topology.
     execution_graph = (
-        graph
+        graph_without_rejected_parallelism(graph, disabled)
         if compiled
         else _serial_graph(baseline_sequence(graph, workflow.declaration_index()))
     )

@@ -35,15 +35,24 @@ export type StreamOptions = {
   mode: PipelineType;
   cacheWarm?: boolean;
   timeScale?: number;
+  disabled?: string[];
 };
 
 /** GET variant of the stream, so the browser's native EventSource can subscribe. */
-export function streamUrl({ workflowId, mode, cacheWarm, timeScale }: StreamOptions): string {
+export function streamUrl({
+  workflowId,
+  mode,
+  cacheWarm,
+  timeScale,
+  disabled,
+}: StreamOptions): string {
   const query = new URLSearchParams({
     workflow_id: workflowId,
     mode,
     cache_warm: String(Boolean(cacheWarm)),
     time_scale: String(timeScale ?? 1),
   });
+  // EventSource cannot send a body, so rejected passes ride the query string.
+  if (disabled?.length) query.set("disabled", disabled.join(","));
   return `${API_BASE}/api/v1/execute/stream?${query.toString()}`;
 }

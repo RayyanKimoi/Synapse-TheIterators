@@ -9,7 +9,11 @@ import { Scoreboard } from "@/components/Scoreboard";
 import { TopNav } from "@/components/TopNav";
 import { useWorkflowExecution } from "@/hooks/useWorkflowExecution";
 import { compileWorkflow, fetchHealth, fetchWorkflow, fetchWorkflows } from "@/lib/api";
-import type { HealthStatus, WorkflowSummary } from "@/lib/types";
+import type {
+  HealthStatus,
+  OptimizationCandidate,
+  WorkflowSummary,
+} from "@/lib/types";
 import { useTelemetryStore } from "@/store/useTelemetryStore";
 
 export default function DashboardPage() {
@@ -65,12 +69,31 @@ export default function DashboardPage() {
     };
   }, [selectedId, setWorkflow]);
 
-  const runOptions = useCallback(() => ({ cacheWarm }), [cacheWarm]);
+  // Passes the developer swiped left on. The backend skips them, so a verdict
+  // changes what actually runs rather than only what the deck shows.
+  const [rejected, setRejected] = useState<string[]>([]);
 
-  // Approving a pass injects it and immediately shows the compiled dispatch.
-  const onApprove = useCallback(() => {
-    start("compiled", { cacheWarm });
-  }, [start, cacheWarm]);
+  const runOptions = useCallback(
+    () => ({ cacheWarm, disabled: rejected }),
+    [cacheWarm, rejected],
+  );
+
+  const onApprove = useCallback(
+    (candidate: OptimizationCandidate) => {
+      // Re-approving a pass puts it back in play, then shows the difference.
+      const next = rejected.filter((id) => id !== candidate.id);
+      setRejected(next);
+      start("compiled", { cacheWarm, disabled: next });
+    },
+    [start, cacheWarm, rejected],
+  );
+
+  const onReject = useCallback(
+    (candidate: OptimizationCandidate) => {
+      setRejected((ids) => (ids.includes(candidate.id) ? ids : [...ids, candidate.id]));
+    },
+    [],
+  );
 
   return (
     <main className="flex h-screen flex-col gap-3 bg-background p-3">
@@ -107,6 +130,7 @@ export default function DashboardPage() {
               <MatchmakerDeck
                 candidates={plan?.optimization_candidates ?? []}
                 onApprove={onApprove}
+                onReject={onReject}
                 busy={busy}
               />
             </div>

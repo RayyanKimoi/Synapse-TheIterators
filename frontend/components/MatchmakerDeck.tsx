@@ -35,6 +35,7 @@ const KIND_PRESENTATION: Record<
 type MatchmakerDeckProps = {
   candidates: OptimizationCandidate[];
   onApprove: (candidate: OptimizationCandidate) => void;
+  onReject: (candidate: OptimizationCandidate) => void;
   busy: boolean;
 };
 
@@ -46,7 +47,12 @@ type MatchmakerDeckProps = {
  * has no extra dependency, and every gesture has an equivalent button — a
  * drag-only control is unreachable by keyboard.
  */
-export function MatchmakerDeck({ candidates, onApprove, busy }: MatchmakerDeckProps) {
+export function MatchmakerDeck({
+  candidates,
+  onApprove,
+  onReject,
+  busy,
+}: MatchmakerDeckProps) {
   const [index, setIndex] = useState(0);
   const [verdict, setVerdict] = useState<"approve" | "reject" | null>(null);
   // null = follow the run state; true/false = the user overrode it.
@@ -88,6 +94,7 @@ export function MatchmakerDeck({ candidates, onApprove, busy }: MatchmakerDeckPr
 
       const commit = () => {
         if (direction === "approve") onApprove(candidate);
+        else onReject(candidate);
         setIndex((value) => value + 1);
       };
 
@@ -105,7 +112,7 @@ export function MatchmakerDeck({ candidates, onApprove, busy }: MatchmakerDeckPr
         onComplete: commit,
       });
     },
-    [candidates, index, onApprove],
+    [candidates, index, onApprove, onReject],
   );
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
