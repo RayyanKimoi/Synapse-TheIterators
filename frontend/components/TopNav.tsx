@@ -1,6 +1,14 @@
 "use client";
 
-import { CloudOff, Flag, Play, Rocket, Workflow, Zap } from "lucide-react";
+import {
+  CloudOff,
+  Flag,
+  Play,
+  Rocket,
+  Terminal,
+  Workflow,
+  Zap,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +33,8 @@ type TopNavProps = {
   onRunCompiled: () => void;
   onRunRace: () => void;
   busy: boolean;
+  /** Omit to hide the Terminal button. */
+  onOpenTerminal?: () => void;
 };
 
 export function TopNav({
@@ -39,6 +49,7 @@ export function TopNav({
   onRunCompiled,
   onRunRace,
   busy,
+  onOpenTerminal,
 }: TopNavProps) {
   return (
     <header className="relative flex flex-wrap items-center gap-3 overflow-hidden rounded-2xl border border-white/[0.08] liquid-chrome px-4 py-2.5">
@@ -64,7 +75,11 @@ export function TopNav({
         </SelectTrigger>
         <SelectContent>
           {workflows.map((workflow) => (
-            <SelectItem key={workflow.workflow_id} value={workflow.workflow_id} className="text-xs">
+            <SelectItem
+              key={workflow.workflow_id}
+              value={workflow.workflow_id}
+              className="text-xs"
+            >
               {workflow.name} · {workflow.node_count} nodes
             </SelectItem>
           ))}
@@ -129,6 +144,19 @@ export function TopNav({
           <Flag className="mr-1 h-3 w-3" />
           Run Arena Race
         </Button>
+        {onOpenTerminal && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-9 rounded-xl border-white/[0.09] font-mono text-xs"
+            onClick={onOpenTerminal}
+            aria-keyshortcuts="`"
+            title="Agent terminal (`)"
+          >
+            <Terminal className="mr-1 h-3 w-3" />
+            Terminal
+          </Button>
+        )}
       </div>
     </header>
   );
@@ -155,7 +183,11 @@ function HealthBadge({ health }: { health: HealthStatus | null }) {
       )}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      {offline ? "Offline · deterministic" : health.llm.ollama ? "Ollama live" : "Proxy live"}
+      {offline
+        ? "Offline · deterministic"
+        : health.llm.ollama
+          ? "Ollama live"
+          : "Proxy live"}
     </span>
   );
 }

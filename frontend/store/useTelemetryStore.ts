@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { appendSample, type BudgetSample } from "@/lib/budget";
 import type {
   CompilePlan,
   NodeTelemetry,
@@ -17,9 +18,11 @@ export type RunState = {
   frame: TelemetryFrame | null;
   summary: RunSummary | null;
   error: string | null;
+  /** Spend over time, one point per frame, for the budget-burn graph. */
+  samples: BudgetSample[];
 };
 
-const EMPTY_RUN: RunState = { status: "idle", frame: null, summary: null, error: null };
+const EMPTY_RUN: RunState = { status: "idle", frame: null, summary: null, error: null, samples: [] };
 
 type TelemetryStore = {
   workflow: WorkflowIR | null;
@@ -58,12 +61,15 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
   // The frame carries its own pipeline_type, so a single handler serves both
   // sides of the race.
   applyFrame: (frame) =>
-    set((state) => ({
-      runs: {
-        ...state.runs,
-        [frame.pipeline_type]: { ...state.runs[frame.pipeline_type], frame },
-      },
-    })),
+    set((state) => {
+      const run = state.runs[frame.pipeline_type];
+      const samples = appendSample(run.samples, {
+        t: frame.elapsed_pipeline_ms,
+        costUsd: frame.aggregate_metrics.total_cost_usd,
+        tokens: frame.aggregate_metrics.total_tokens,
+      });
+      return { runs: { ...state.runs, [frame.pipeline_type]: { ...run, frame, samples } } };
+    }),
 
   applySummary: (summary) =>
     set((state) => ({

@@ -9,6 +9,8 @@ import {
   formatUsd,
   useCountUp,
 } from "@/hooks/useCountUp";
+import { BudgetBurn } from "@/components/BudgetBurn";
+import { formatBudget } from "@/lib/budget";
 import type { CompilePlan, WorkflowIR } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useTelemetryStore } from "@/store/useTelemetryStore";
@@ -71,10 +73,14 @@ export function Scoreboard({ workflow, plan }: ScoreboardProps) {
 
       <Divider />
 
+      <BudgetBurn declaredBudget={workflow.budget_limit_usd} />
+
+      <Divider />
+
       <div className="flex shrink-0 items-center gap-2">
         <TrustBadge
           ok={!breakerTripped}
-          label={`Budget cap $${workflow.budget_limit_usd.toFixed(2)}`}
+          label={`Budget cap ${formatBudget(metrics?.budget_limit_usd || workflow.budget_limit_usd)}`}
           value={breakerTripped ? "TRIPPED" : "PASS"}
         />
         <TrustBadge

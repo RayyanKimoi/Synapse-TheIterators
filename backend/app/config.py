@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     langfuse_host: str = "http://localhost:3030"
     tracing_export_timeout_s: int = 5
 
+    # LLM-as-a-judge (app/llm/judge.py): an independent model compares the
+    # baseline and compiled outputs. Independent of llm_offline_mode on purpose
+    # -- it evaluates the pipeline, it is not part of it. No key, no judge: it
+    # reports itself unavailable rather than inventing a verdict.
+    gemini_api_key: str | None = None
+    judge_model: str = "gemini-3.5-flash"
+    judge_timeout_s: float = Field(default=60.0, gt=0)
+
     llm_offline_mode: bool = False
     telemetry_tick_ms: int = 100
     workflows_dir: Path = REPO_ROOT / "workflows"

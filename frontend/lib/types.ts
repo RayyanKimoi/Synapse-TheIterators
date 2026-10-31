@@ -18,6 +18,8 @@ export type AggregateMetrics = {
   projected_cost_saved_usd: number;
   circuit_breaker_status: CircuitBreakerStatus;
   correctness_score: number;
+  /** The budget the breaker enforces (declared, clamped to the deployment ceiling). */
+  budget_limit_usd: number;
 };
 
 export type TelemetryFrame = {
@@ -121,3 +123,13 @@ export const IDLE_TELEMETRY: NodeTelemetry = {
   cost_usd: 0,
   is_cache_hit: false,
 };
+
+/** Mirrors backend/app/agent/terminal.py: the agent terminal's event stream. */
+export type AgentTone = "text" | "muted" | "info" | "ok" | "warn" | "error" | "accent";
+
+export type AgentEvent =
+  | { type: "plan"; steps: { tool: string; title: string }[] }
+  | { type: "step"; index: number; title: string }
+  | { type: "line"; text: string; tone: AgentTone }
+  | { type: "ui"; action: "select"; workflow_id: string }
+  | { type: "done"; ok: boolean; elapsed_ms: number };

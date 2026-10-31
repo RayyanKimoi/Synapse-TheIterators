@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AgentRoster } from "@/components/AgentRoster";
+import { AgentTerminal } from "@/components/AgentTerminal";
 import { MatchmakerDeck } from "@/components/MatchmakerDeck";
 import { RaceArena } from "@/components/RaceArena";
 import { Scoreboard } from "@/components/Scoreboard";
@@ -95,6 +96,18 @@ export default function DashboardPage() {
     [],
   );
 
+  const [terminalOpen, setTerminalOpen] = useState(false);
+
+  // `arena …` in the terminal drives the same runs as the TopNav buttons,
+  // honouring the cache toggle and every pass rejected in the Matchmaker.
+  const onArena = useCallback(
+    (action: "race" | "baseline" | "compiled") => {
+      if (action === "race") startRace(runOptions());
+      else start(action, runOptions());
+    },
+    [start, startRace, runOptions],
+  );
+
   return (
     <main className="flex h-screen flex-col gap-3 bg-background p-3">
       <TopNav
@@ -109,6 +122,7 @@ export default function DashboardPage() {
         onRunCompiled={() => start("compiled", runOptions())}
         onRunRace={() => startRace(runOptions())}
         busy={busy}
+        onOpenTerminal={() => setTerminalOpen(true)}
       />
 
       {loadError && (
@@ -144,6 +158,16 @@ export default function DashboardPage() {
           </div>
         )
       )}
+
+      <AgentTerminal
+        open={terminalOpen}
+        onOpenChange={setTerminalOpen}
+        workflowId={selectedId}
+        workflows={workflows}
+        busy={busy}
+        onSelectWorkflow={setSelectedId}
+        onArena={onArena}
+      />
     </main>
   );
 }

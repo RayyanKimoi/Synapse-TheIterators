@@ -30,6 +30,9 @@ def _offline_llm() -> None:
     """
     settings = get_settings()
     object.__setattr__(settings, "llm_offline_mode", True)
+    # The .env may hold a real Gemini key for the judge; the suite drives the
+    # judge through a fake transport instead (test_judge.py).
+    object.__setattr__(settings, "gemini_api_key", None)
 
 
 @pytest.fixture(autouse=True)

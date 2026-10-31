@@ -1,4 +1,5 @@
 import type {
+  AgentEvent,
   CompilePlan,
   HealthStatus,
   PipelineType,
@@ -55,4 +56,47 @@ export function streamUrl({
   // EventSource cannot send a body, so rejected passes ride the query string.
   if (disabled?.length) query.set("disabled", disabled.join(","));
   return `${API_BASE}/api/v1/execute/stream?${query.toString()}`;
+}
+
+/**
+ * Sends one terminal line to the agent and hands each event to `onEvent` as the
+ * backend streams it. POST + fetch rather than EventSource: EventSource cannot
+ * send a body, and a terminal line carries quotes and arbitrary length.
+ */
+export async function streamAgent(
+  input: string,
+  workflowId: string | null,
+  signal: AbortSignal,
+  onEvent: (event: AgentEvent) => void,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/v1/agent/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ input, workflow_id: workflowId }),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`/api/v1/agent/run responded ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Events end with a blank line; sse-starlette writes \r\n. Keepalive pings
+    // are comment lines with no `data:`, so they fall out here.
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() ?? "";
+    for (const block of events) {
+      const data = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (data) onEvent(JSON.parse(data) as AgentEvent);
+    }
+  }
 }

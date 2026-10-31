@@ -1,5 +1,6 @@
 """SYNAPSE HTTP surface (PRD sections 5.1 and 11, Phase 1)."""
 
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
@@ -7,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse
 
 from .. import registry
+from ..agent.terminal import run_agent
 from ..compiler.dag import CompileError
 from ..compiler.planner import CompilePlan, compile_workflow
 from ..config import get_settings
@@ -137,4 +139,29 @@ async def execute_stream_get(
     rejected = frozenset(part for part in (disabled or "").split(",") if part)
     return _stream(
         _resolve(None, workflow_id), mode, cache_warm, time_scale, query, rejected
+    )
+
+
+class AgentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
+    # The workflow the dashboard has selected; steps that name none act on it.
+    workflow_id: str | None = None
+
+
+@router.post("/agent/run")
+async def agent_run(request: AgentRequest) -> EventSourceResponse:
+    """The agent terminal: plan the input, run each step, stream every event.
+
+    POST rather than GET because a terminal line can be long and carries quotes;
+    the browser reads the stream with fetch() instead of EventSource.
+    """
+
+    async def events():
+        async for event in run_agent(request.input, workflow_id=request.workflow_id):
+            yield {"event": "agent", "data": json.dumps(event)}
+
+    return EventSourceResponse(
+        events(), headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )

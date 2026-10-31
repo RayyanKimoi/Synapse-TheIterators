@@ -131,6 +131,7 @@ def _frame(
         ),
         # Certified only once the run has finished; see contract.evaluate_contract.
         correctness_score=(contract.semantic_invariance or 0.0) if contract else 0.0,
+        budget_limit_usd=budget.limit_usd if math.isfinite(budget.limit_usd) else 0.0,
     )
 
     return TelemetryFrame(

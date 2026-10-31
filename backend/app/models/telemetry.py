@@ -49,6 +49,9 @@ class AggregateMetrics(BaseModel):
     projected_cost_saved_usd: float = 0.0
     circuit_breaker_status: CircuitBreakerStatus = CircuitBreakerStatus.NORMAL
     correctness_score: float = 0.0
+    # The budget the breaker enforces: the IR's budget_limit_usd clamped to the
+    # deployment ceiling. Sent so a client's "% of budget" matches the breaker.
+    budget_limit_usd: float = 0.0
 
 
 class ContractReport(BaseModel):
