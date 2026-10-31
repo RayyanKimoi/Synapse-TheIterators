@@ -14,6 +14,7 @@ evaluated and carried on the final frame and on `run_complete`.
 """
 
 import asyncio
+import math
 import time
 import uuid
 from collections import Counter
@@ -24,7 +25,8 @@ import networkx as nx
 
 from ..compiler.dag import assert_acyclic, baseline_sequence, build_graph
 from ..compiler.scheduler import NodeTiming, ready_node_timings, run_ready_nodes
-from ..config import get_settings
+from ..config import Settings, get_settings
+from ..llm.cache import SemanticCache, get_cache
 from ..llm.gateway import Guardrails, LLMGateway, LLMSource, RunBudget
 from ..models.ir import WorkflowIR
 from ..models.telemetry import (
@@ -39,20 +41,13 @@ from ..models.telemetry import (
 )
 from .contract import evaluate_contract, final_payload
 from .executor import NodeExecutor, NodeOutcome
-from .profile import FRESH_SINK_LATENCY_MS, baseline_reference_costs, build_node_work
+from .profile import NodeWork, baseline_reference_costs, build_node_work
 
 LLM_SOURCES = frozenset(get_args(LLMSource))
 
-
-def _warm_cache_plan(graph: nx.DiGraph) -> tuple[set[str], dict[str, int]]:
-    """Act 4 of the demo: every upstream node is served from the semantic cache,
-    and the terminal node only has to compose a short answer from cached context
-    for the paraphrased query."""
-    cached = {node for node in graph.nodes if graph.out_degree(node) > 0}
-    sink_caps = {
-        node: FRESH_SINK_LATENCY_MS for node in graph.nodes if graph.out_degree(node) == 0
-    }
-    return cached, sink_caps
+# A priming pass only has to populate the cache, so its simulated latency is
+# collapsed to effectively zero.
+PRIME_TIME_SCALE = 1e6
 
 
 def _serial_graph(sequence: list[str]) -> nx.DiGraph:
@@ -153,6 +148,7 @@ async def stream_telemetry(
     time_scale: float = 1.0,
     run_id: str | None = None,
     query: str | None = None,
+    cache: SemanticCache | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Yield sse-starlette event dicts until the run completes.
 
@@ -168,21 +164,29 @@ async def stream_telemetry(
 
     graph = build_graph(workflow)
     assert_acyclic(graph)
-    cached, caps = _warm_cache_plan(graph) if cache_warm else (set(), {})
 
     compiled = mode is PipelineType.COMPILED
-    plan = build_node_work(
-        workflow, graph, compiled=compiled, cached_ids=cached, duration_caps_ms=caps
-    )
+    plan = build_node_work(workflow, graph, compiled=compiled)
     guardrails = Guardrails.resolve(workflow, settings)
     budget = RunBudget(limit_usd=guardrails.budget_limit_usd)
+    gateway = LLMGateway(settings)
+    cache = cache if cache is not None else get_cache()
+    query = query or workflow.name
+
+    if cache_warm:
+        await _prime_cache(
+            workflow, graph, plan, gateway, cache, mode.value, query, settings
+        )
+
     executor = NodeExecutor(
         workflow,
         graph,
         plan,
-        gateway=LLMGateway(settings),
+        gateway=gateway,
+        cache=cache,
+        scope=mode.value,
         budget=budget,
-        query=query or workflow.name,
+        query=query,
         time_scale=time_scale,
     )
 
@@ -279,7 +283,8 @@ async def stream_telemetry(
         payload=payload,
         latency_ms=total_ms,
         cache_hits={
-            node: outcome.cache_similarity
+            # `or 0.0` is fail-closed: an unmeasured hit must not certify a run.
+            node: outcome.cache_similarity or 0.0
             for node, outcome in executor.outcomes.items()
             if outcome.cache_hit
         },
@@ -307,3 +312,37 @@ async def stream_telemetry(
         ),
     )
     yield {"event": "run_complete", "data": summary.model_dump_json()}
+
+
+async def _prime_cache(
+    workflow: WorkflowIR,
+    graph: nx.DiGraph,
+    plan: dict[str, NodeWork],
+    gateway: LLMGateway,
+    cache: SemanticCache,
+    scope: str,
+    query: str,
+    settings: Settings,
+) -> None:
+    """Act 4 of the demo: `cache_warm` means this workflow has genuinely been
+    run before, so run it once -- with the simulated latency collapsed -- and
+    let the measured run find the vectors it left behind.
+
+    Priming carries its own unlimited budget: the breaker belongs to the run
+    being measured, not to the history behind it.
+    """
+    await run_ready_nodes(
+        graph,
+        work=NodeExecutor(
+            workflow,
+            graph,
+            plan,
+            gateway=gateway,
+            cache=cache,
+            scope=scope,
+            budget=RunBudget(limit_usd=math.inf),
+            query=query,
+            time_scale=PRIME_TIME_SCALE,
+        ),
+        max_concurrency=settings.max_concurrent_tasks,
+    )

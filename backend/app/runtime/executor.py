@@ -1,12 +1,20 @@
 """What a node does when the Ready-Node scheduler dispatches it.
 
-LLM nodes call the LiteLLM gateway with the run's budget attached, so the
-circuit breaker is evaluated before every outbound request; a trip fails the
-node and halts its branch. Terminal LLM nodes are asked for a JSON object with
-the IR's `required_output_keys`, which the contract check reads afterwards.
+Every node is probed against the semantic cache first. A hit is served for zero
+tokens and zero spend, which is also why it is probed *before* the budget: a
+cached answer costs nothing, so it is still served once the circuit breaker has
+tripped. On a miss, LLM nodes call the LiteLLM gateway with the run's budget
+attached, so the breaker is evaluated before every outbound request; a trip
+fails the node and halts its branch. Terminal LLM nodes are asked for a JSON
+object with the IR's `required_output_keys`, which the contract check reads
+afterwards.
 
-Tool nodes have no live client yet and return a labelled stub. Warm-cache hits
-are still scheduled rather than computed until the semantic cache lands.
+Cache namespaces are scoped per pipeline as well as per node: the arena races
+the baseline and the compiled run on the same query, and a shared cache would
+let whichever ran second answer entirely from the first one's work.
+
+Tool nodes have no live client yet and return a labelled stub, cached under the
+short real-time TTL.
 """
 
 import asyncio
@@ -16,6 +24,7 @@ from dataclasses import dataclass
 import networkx as nx
 
 from ..compiler.scheduler import HaltBranch
+from ..llm.cache import SemanticCache, ttl_for
 from ..llm.gateway import BudgetExceededError, LLMGateway, RunBudget
 from ..models.ir import NodeType, WorkflowIR, WorkflowNode
 from .profile import NodeWork
@@ -25,13 +34,14 @@ from .profile import NodeWork
 class NodeOutcome:
     node_id: str
     output: str
-    # litellm_proxy | ollama | mock (gateway), tool_stub, cache, breaker
+    # litellm_proxy | ollama | mock (gateway), tool_stub, cache_redis,
+    # cache_memory, breaker
     source: str
     tokens: int = 0
     cost_usd: float = 0.0
     cache_hit: bool = False
-    # Match similarity of a measured cache hit. None for executed nodes and for
-    # scheduled warm-cache hits, which are never measured.
+    # Measured cosine similarity of the match that served this node. None for
+    # nodes that actually executed.
     cache_similarity: float | None = None
     error: str | None = None
 
@@ -46,6 +56,8 @@ class NodeExecutor:
         plan: dict[str, NodeWork],
         *,
         gateway: LLMGateway,
+        cache: SemanticCache,
+        scope: str,
         budget: RunBudget,
         query: str,
         time_scale: float,
@@ -53,6 +65,8 @@ class NodeExecutor:
         self.nodes = workflow.node_map()
         self.plan = plan
         self.gateway = gateway
+        self.cache = cache
+        self.scope = scope
         self.budget = budget
         self.query = query
         self.time_scale = time_scale
@@ -62,26 +76,48 @@ class NodeExecutor:
 
     async def __call__(self, node_id: str) -> int:
         node = self.nodes[node_id]
-        planned = self.plan[node_id]
+        question, context = self._prompt_parts(node)
+        namespace = f"{self.scope}|{node_id}|{node.model or node.tool_name}"
 
-        if planned.cache_hit:
-            await self._simulate(planned.duration_ms)
+        vectors, hit = await self.cache.probe(namespace, query=question, context=context)
+        if hit is not None:
             self.outcomes[node_id] = NodeOutcome(
-                node_id, f"[cache:scheduled] {node_id}", "cache", cache_hit=True
+                node_id,
+                hit.text,
+                f"cache_{hit.backend}",
+                cache_hit=True,
+                cache_similarity=hit.similarity,
             )
-            return planned.duration_ms
+            return hit.latency_ms
 
         if node.type is NodeType.TOOL_IO:
-            await self._simulate(planned.duration_ms)
-            self.outcomes[node_id] = NodeOutcome(node_id, _tool_stub(node), "tool_stub")
-            return planned.duration_ms
+            outcome, duration = await self._run_tool(node)
+        else:
+            outcome, duration = await self._run_llm(node, _joined(question, context))
 
-        return await self._run_llm(node, planned)
+        # Awaited, not fired and forgotten: the write never blocks the event
+        # loop, and a run that warms the cache must be able to rely on it.
+        await self.cache.store(
+            namespace,
+            query=question,
+            context=context,
+            text=outcome.output,
+            vectors=vectors,
+            ttl_s=ttl_for(node.type),
+        )
+        self.outcomes[node.id] = outcome
+        return duration
 
-    async def _run_llm(self, node: WorkflowNode, planned: NodeWork) -> int:
+    async def _run_tool(self, node: WorkflowNode) -> tuple[NodeOutcome, int]:
+        duration = self.plan[node.id].duration_ms
+        await self._simulate(duration)
+        return NodeOutcome(node.id, _tool_stub(node), "tool_stub"), duration
+
+    async def _run_llm(self, node: WorkflowNode, prompt: str) -> tuple[NodeOutcome, int]:
+        planned = self.plan[node.id]
         try:
             result = await self.gateway.complete(
-                prompt=self._prompt(node),
+                prompt=prompt,
                 system_prompt=f"You are the {node.persona}. {node.system_prompt}",
                 model=node.model,
                 budget=self.budget,
@@ -101,26 +137,33 @@ class NodeExecutor:
         else:
             duration = result.latency_ms
 
-        self.outcomes[node.id] = NodeOutcome(
-            node.id,
-            result.text,
-            result.source,
-            tokens=result.tokens_consumed,
-            cost_usd=result.cost_usd,
+        return (
+            NodeOutcome(
+                node.id,
+                result.text,
+                result.source,
+                tokens=result.tokens_consumed,
+                cost_usd=result.cost_usd,
+            ),
+            duration,
         )
-        return duration
 
-    def _prompt(self, node: WorkflowNode) -> str:
-        sections = [f"User query: {self.query}"]
-        sections += [
+    def _prompt_parts(self, node: WorkflowNode) -> tuple[str, str]:
+        """The prompt split the way the cache scores it: question, then the
+        upstream context it is answered against."""
+        context = "\n\n".join(
             f"Output from {dependency}:\n{self.outcomes[dependency].output}"
             for dependency in node.dependencies
-        ]
-        return "\n\n".join(sections)
+        )
+        return f"User query: {self.query}", context
 
     async def _simulate(self, duration_ms: int) -> None:
         if duration_ms > 0:
             await asyncio.sleep(duration_ms / 1000 / self.time_scale)
+
+
+def _joined(question: str, context: str) -> str:
+    return f"{question}\n\n{context}" if context else question
 
 
 def _tool_stub(node: WorkflowNode) -> str:

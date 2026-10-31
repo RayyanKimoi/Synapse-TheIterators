@@ -160,8 +160,8 @@ def compile_workflow(workflow: WorkflowIR) -> CompilePlan:
     pending = in_degrees(graph)
     sequence = baseline_sequence(graph, workflow.declaration_index())
 
-    baseline = build_baseline_schedule(workflow, sequence, set(), graph=graph)
-    compiled = build_compiled_schedule(workflow, graph, set())
+    baseline = build_baseline_schedule(workflow, sequence, graph=graph)
+    compiled = build_compiled_schedule(workflow, graph)
     baseline_estimate = _estimate(baseline)
     compiled_estimate = _estimate(compiled)
 

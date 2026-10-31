@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from app import registry
 from app.compiler.dag import CompileError, build_graph, topological_depths
 from app.compiler.planner import compile_workflow
+from app.llm.cache import get_cache
 from app.llm.gateway import BudgetExceededError, LLMGateway, RunBudget
 from app.main import app
 from app.models.ir import WorkflowIR
@@ -161,8 +162,11 @@ def test_warm_cache_run_is_sub_second_and_free(workflow: WorkflowIR) -> None:
     summary = _collect(
         workflow=workflow, mode=PipelineType.COMPILED, cache_warm=True
     )[-1][1]
-    assert summary["cache_hits"] == 4
+    # Priming ran the whole graph, so every node is now served from vectors.
+    assert summary["cache_hits"] == len(workflow.nodes)
     assert summary["total_elapsed_ms"] < 1_000
+    assert summary["aggregate_metrics"]["total_tokens"] == 0
+    assert summary["aggregate_metrics"]["total_cost_usd"] == 0
     assert summary["aggregate_metrics"]["projected_cost_saved_usd"] > 0
 
 
@@ -175,6 +179,9 @@ def test_cached_nodes_report_zero_tokens(workflow: WorkflowIR) -> None:
 
 def test_telemetry_is_deterministic(workflow: WorkflowIR) -> None:
     first = _collect(workflow=workflow, mode=PipelineType.COMPILED)[-1][1]
+    # Without this the second run would legitimately be served from the first
+    # one, which is the cache working -- but not what this test is measuring.
+    get_cache.cache_clear()
     second = _collect(workflow=workflow, mode=PipelineType.COMPILED)[-1][1]
     assert first["total_elapsed_ms"] == second["total_elapsed_ms"]
     assert first["aggregate_metrics"] == second["aggregate_metrics"]

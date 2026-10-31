@@ -23,9 +23,6 @@ from ..models.ir import NodeType, WorkflowIR, WorkflowNode
 # (210 tokens -> $0.00042).
 COST_PER_TOKEN_USD = 2e-6
 
-CACHE_HIT_LATENCY_MS = 4
-FRESH_SINK_LATENCY_MS = 350
-
 BASE_LATENCY_MS = {NodeType.LLM_AGENT: 4_500, NodeType.TOOL_IO: 8_500}
 BASE_TOKENS = {NodeType.LLM_AGENT: 480, NodeType.TOOL_IO: 0}
 
@@ -42,7 +39,6 @@ class NodeWork:
     duration_ms: int
     tokens: int
     cost_usd: float
-    cache_hit: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +48,6 @@ class ScheduledNode:
     duration_ms: int
     tokens: int
     cost_usd: float
-    cache_hit: bool
 
     @property
     def end_ms(self) -> int:
@@ -83,12 +78,6 @@ def baseline_reference_costs(workflow: WorkflowIR) -> dict[str, float]:
     return {node.id: tokens_cost_usd(node_tokens(node)) for node in workflow.nodes}
 
 
-def _capped(latency_ms: int, node_id: str, caps: dict[str, int] | None) -> int:
-    if not caps or node_id not in caps:
-        return latency_ms
-    return min(latency_ms, caps[node_id])
-
-
 def _is_speculatively_prefetched(node: WorkflowNode, graph: nx.DiGraph) -> bool:
     """True when this tool call is fired concurrently with sibling dispatches.
 
@@ -107,16 +96,10 @@ def build_node_work(
     graph: nx.DiGraph,
     *,
     compiled: bool,
-    cached_ids: set[str],
-    duration_caps_ms: dict[str, int] | None = None,
 ) -> dict[str, NodeWork]:
     """Per-node duration/tokens/cost, with V3 gains applied when compiled."""
     work: dict[str, NodeWork] = {}
     for node in workflow.nodes:
-        if node.id in cached_ids:
-            work[node.id] = NodeWork(node.id, CACHE_HIT_LATENCY_MS, 0, 0.0, True)
-            continue
-
         latency = node_latency_ms(node)
         tokens = node_tokens(node)
 
@@ -128,13 +111,7 @@ def build_node_work(
                 latency = round(latency * PROMPT_FUSION_FACTOR)
                 tokens = round(tokens * PROMPT_FUSION_FACTOR)
 
-        work[node.id] = NodeWork(
-            node.id,
-            _capped(latency, node.id, duration_caps_ms),
-            tokens,
-            tokens_cost_usd(tokens),
-            False,
-        )
+        work[node.id] = NodeWork(node.id, latency, tokens, tokens_cost_usd(tokens))
     return work
 
 
@@ -148,7 +125,6 @@ def _schedule_from(
             work[node.id].duration_ms,
             work[node.id].tokens,
             work[node.id].cost_usd,
-            work[node.id].cache_hit,
         )
         for node in workflow.nodes  # declaration order keeps the UI stable
     }
@@ -157,19 +133,11 @@ def _schedule_from(
 def build_baseline_schedule(
     workflow: WorkflowIR,
     sequence: list[str],
-    cached_ids: set[str],
-    duration_caps_ms: dict[str, int] | None = None,
     graph: nx.DiGraph | None = None,
 ) -> dict[str, ScheduledNode]:
     """One node at a time: total latency is the sum over all nodes."""
     graph = graph if graph is not None else nx.DiGraph()
-    work = build_node_work(
-        workflow,
-        graph,
-        compiled=False,
-        cached_ids=cached_ids,
-        duration_caps_ms=duration_caps_ms,
-    )
+    work = build_node_work(workflow, graph, compiled=False)
     timings: dict[str, NodeTiming] = {}
     cursor = 0
     for node_id in sequence:
@@ -181,21 +149,13 @@ def build_baseline_schedule(
 def build_compiled_schedule(
     workflow: WorkflowIR,
     graph: nx.DiGraph,
-    cached_ids: set[str],
-    duration_caps_ms: dict[str, int] | None = None,
 ) -> dict[str, ScheduledNode]:
     """Ready-Node placement: a node starts when its own parents finish.
 
     No tier barrier. This is the analytical twin of the live scheduler and
     produces the same numbers it records.
     """
-    work = build_node_work(
-        workflow,
-        graph,
-        compiled=True,
-        cached_ids=cached_ids,
-        duration_caps_ms=duration_caps_ms,
-    )
+    work = build_node_work(workflow, graph, compiled=True)
     timings = ready_node_timings(graph, lambda node_id: work[node_id].duration_ms)
     return _schedule_from(workflow, work, timings)
 

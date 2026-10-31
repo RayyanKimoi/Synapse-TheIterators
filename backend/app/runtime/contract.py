@@ -43,27 +43,27 @@ def evaluate_contract(
     *,
     payload: Mapping[str, Any],
     latency_ms: int,
-    cache_hits: Mapping[str, float | None],
+    cache_hits: Mapping[str, float],
     halted: bool,
 ) -> ContractReport:
-    """`cache_hits` maps each node a cache served to its match similarity
-    (None when the hit was scheduled rather than measured)."""
+    """`cache_hits` maps each node a cache served to its measured cosine
+    similarity against the prompt that was actually asked."""
     assertions = workflow.test_assertions
     missing = [key for key in assertions.required_output_keys if key not in payload]
     latency_ok = latency_ms <= assertions.max_acceptable_latency_ms
 
-    # Placeholder until embedding cosine replaces it: a run is structurally
-    # invariant when every node executed its own declared prompt. A halted run,
-    # or one where a cache substituted an output, cannot be certified this way.
-    invariance = None if halted or cache_hits else 1.0
+    # The run is only as output-invariant as its weakest cached substitution:
+    # every node that executed answered its own declared prompt exactly, so a
+    # run with no cache hits is 1.0. A halted run cannot be certified at all.
+    invariance = None if halted else min(cache_hits.values(), default=1.0)
 
-    # Admission guardrail: a cache may only serve outputs whose match cleared the
-    # configured threshold. Unmeasured hits are excluded here; they already
-    # block certification above.
+    # Admission guardrail: a cache may only serve outputs whose match cleared
+    # the configured threshold. `lookup` already enforces this, so a violation
+    # here means an entry was admitted by something other than the live path.
     violations = sorted(
         node
         for node, similarity in cache_hits.items()
-        if similarity is not None and similarity < guardrails.cache_similarity_threshold
+        if similarity < guardrails.cache_similarity_threshold
     )
 
     passed = (

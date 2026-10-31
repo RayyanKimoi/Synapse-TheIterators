@@ -1,4 +1,4 @@
-# SYNAPSE backend — Phase 1 runtime dependencies (Python 3.11+)
+# SYNAPSE backend runtime dependencies (Python 3.11+)
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.6
@@ -10,6 +10,12 @@ httpx>=0.27
 # Model routing + guardrails. Imported lazily by app/llm/gateway.py: if it is
 # absent or unreachable the gateway degrades to deterministic mocks.
 litellm>=1.40
+
+# Semantic cache. Both are imported lazily by app/llm/cache.py: without
+# fastembed the cache falls back to hashed lexical vectors, and without a
+# reachable Redis it falls back to an in-memory dictionary.
+fastembed>=0.3
+redis>=5.0
 
 # uvloop is POSIX-only; uvicorn picks it up automatically when installed.
 uvloop>=0.19; sys_platform != "win32"

@@ -274,12 +274,22 @@ def test_baseline_fails_the_latency_assertion(workflow: WorkflowIR) -> None:
     assert not contract["passed"]
 
 
-def test_scheduled_cache_hits_cannot_certify_invariance(workflow: WorkflowIR) -> None:
+def test_warm_cache_invariance_is_measured_not_assumed(workflow: WorkflowIR) -> None:
+    """A warm run repeats the primed query exactly, so every hit measures 1.0
+    and the run certifies -- on measurement, not on a hardcoded constant."""
     events = _run(workflow, cache_warm=True)
     contract = events[-1][1]["contract"]
+    assert contract["semantic_invariance"] == 1.0
+    assert contract["cache_admission_violations"] == []
+    assert contract["passed"]
+    assert events[-2][1]["aggregate_metrics"]["correctness_score"] == 1.0
+
+
+def test_a_halted_run_cannot_certify_invariance(workflow: WorkflowIR) -> None:
+    contract = _run(_with_budget(workflow, 0.0005))[-1][1]["contract"]
+    assert contract["halted"]
     assert contract["semantic_invariance"] is None
     assert not contract["passed"]
-    assert events[-2][1]["aggregate_metrics"]["correctness_score"] == 0.0
 
 
 def test_missing_keys_fail_the_contract(workflow: WorkflowIR) -> None:
