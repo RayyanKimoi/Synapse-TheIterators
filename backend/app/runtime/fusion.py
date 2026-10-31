@@ -161,10 +161,15 @@ def signature_spec(group: FusionGroup) -> str:
 
 
 def fused_system_prompt(group: FusionGroup) -> str:
-    return (
-        f"{group.instructions}\n\n"
-        f"DSPy signature: {signature_spec(group)}\n"
-        "Respond with only a single JSON object whose keys are exactly: "
-        f"{', '.join(group.fields[m] for m in group.members)}. "
-        "Every value must be a string."
-    )
+    """The merged instructions and signature.
+
+    The JSON-object instruction is deliberately absent: the gateway appends it
+    from `response_keys`, so there is one wording of that contract in the
+    codebase and the offline mock honours the same one a live model is given.
+    """
+    return f"{group.instructions}\n\nDSPy signature: {signature_spec(group)}"
+
+
+def response_keys(group: FusionGroup) -> list[str]:
+    """The merged output fields, in member order, for the gateway contract."""
+    return [group.fields[member] for member in group.members]

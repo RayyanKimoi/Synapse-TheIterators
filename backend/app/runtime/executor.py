@@ -23,6 +23,7 @@ short real-time TTL.
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass
 
@@ -34,7 +35,10 @@ from ..llm.gateway import BudgetExceededError, LLMGateway, RunBudget
 from ..models.ir import NodeType, WorkflowIR, WorkflowNode
 from .contract import extract_json_object
 from .fusion import FusionGroup, fused_system_prompt
+from .fusion import response_keys as fusion_response_keys
 from .profile import NodeWork, node_latency_ms
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +83,9 @@ class NodeExecutor:
         self._speculated: dict[str, asyncio.Task[str]] = {}
         # Follower output waiting to be collected, written by the group leader.
         self._fused_slices: dict[str, str] = {}
+        # Leaders whose merged response could not be split; their groups run
+        # unfused for the rest of this run.
+        self._fusion_failed: set[str] = set()
         self.nodes = workflow.node_map()
         self.plan = plan
         self.gateway = gateway
@@ -112,9 +119,10 @@ class NodeExecutor:
             )
             return hit.latency_ms
 
+        group = self.fusion.get(node_id)
         if node.type is NodeType.TOOL_IO:
             outcome, duration = await self._run_tool(node)
-        elif node_id in self.fusion:
+        elif group is not None and group.leader not in self._fusion_failed:
             outcome, duration = await self._run_fused(node, _joined(question, context))
         else:
             outcome, duration = await self._run_llm(node, _joined(question, context))
@@ -155,7 +163,7 @@ class NodeExecutor:
                 # One call now carries every member's output.
                 max_tokens=512 * len(group.members),
                 budget=self.budget,
-                response_keys=None,  # the fused signature already states them
+                response_keys=fusion_response_keys(group),
             )
         except BudgetExceededError as exc:
             self.outcomes[node.id] = NodeOutcome(
@@ -164,9 +172,28 @@ class NodeExecutor:
             raise HaltBranch(str(exc)) from exc
 
         merged = extract_json_object(result.text) or {}
+        unfilled = [
+            member
+            for member in group.members
+            if not str(merged.get(group.fields[member], "")).strip()
+        ]
+        if unfilled:
+            # The model did not honour the merged contract -- a dropped closing
+            # brace is enough. The group cannot be split, so abandon fusion for
+            # this run and let every member make its own call. That costs the
+            # round trips fusion saved, but no node is handed a silent blank.
+            logger.warning(
+                "fused group %s could not be split (%s unfilled); "
+                "falling back to one call per node",
+                "+".join(group.members),
+                ", ".join(unfilled),
+            )
+            self._fusion_failed.add(group.leader)
+            return await self._run_llm(node, prompt)
+
         for member, field in group.fields.items():
             if member != node.id:
-                self._fused_slices[member] = str(merged.get(field, ""))
+                self._fused_slices[member] = str(merged[field])
 
         if result.source == "mock":
             await self._simulate(planned.duration_ms - result.latency_ms)
@@ -174,11 +201,10 @@ class NodeExecutor:
         else:
             duration = result.latency_ms
 
-        leader_field = group.fields[node.id]
         return (
             NodeOutcome(
                 node.id,
-                str(merged.get(leader_field, result.text)),
+                str(merged[group.fields[node.id]]),
                 # The raw gateway source, so `llm_calls` still counts the one
                 # request the group made. `fused_follower` is what marks the
                 # calls fusion removed.

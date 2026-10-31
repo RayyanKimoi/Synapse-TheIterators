@@ -14,9 +14,15 @@ import pytest
 from app import registry
 from app.compiler.dag import build_graph
 from app.compiler.planner import compile_workflow
+from app.compiler.scheduler import run_ready_nodes
+from app.config import Settings
+from app.llm.cache import SemanticCache
+from app.llm.gateway import LLMResult, RunBudget
 from app.models.ir import WorkflowIR
 from app.models.telemetry import PipelineType
+from app.runtime.executor import NodeExecutor
 from app.runtime.fusion import fused_system_prompt, plan_fusion, signature_spec
+from app.runtime.profile import build_node_work
 from app.runtime.runner import stream_telemetry
 
 MODEL = "ollama/qwen2.5-7b"
@@ -238,6 +244,97 @@ def test_the_baseline_pipeline_does_not_fuse() -> None:
     workflow = _workflow([_agent("draft", []), _agent("polish", ["draft"])])
     states = _run(workflow, mode=PipelineType.BASELINE)[-2][1]["node_states"]
     assert all(state["tokens_consumed"] > 0 for state in states.values())
+
+
+# --- when the model does not honour the merged contract --------------------
+
+
+class _DroppedBraceGateway:
+    """A model that omits the closing brace on its first answer.
+
+    Not hypothetical: a real qwen2.5-3b did exactly this through the live proxy,
+    and the group silently handed its follower an empty string.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(self, *, prompt, system_prompt="", model=None, **kwargs):
+        self.calls += 1
+        text = (
+            '{"draft": "drafted", "polish": "polished"'  # <- no closing brace
+            if self.calls == 1
+            else f"unfused answer {self.calls}"
+        )
+        return LLMResult(
+            text=text,
+            tokens_consumed=10,
+            cost_usd=0.0001,
+            latency_ms=1,
+            source="mock",
+            model=model or "m",
+        )
+
+
+def _execute_chain(gateway) -> NodeExecutor:
+    workflow = _workflow([_agent("draft", []), _agent("polish", ["draft"])])
+    graph = build_graph(workflow)
+    fusion = plan_fusion(workflow, graph)
+    executor = NodeExecutor(
+        workflow,
+        graph,
+        build_node_work(workflow, graph, compiled=True, fusion=fusion),
+        gateway=gateway,
+        cache=SemanticCache(Settings(), use_redis=False),
+        scope="compiled",
+        budget=RunBudget(limit_usd=1.0),
+        query="q",
+        time_scale=10_000.0,
+        fusion=fusion,
+    )
+    asyncio.run(_drain(graph, executor))
+    return executor
+
+
+async def _drain(graph, executor: NodeExecutor) -> None:
+    await run_ready_nodes(graph, work=executor, max_concurrency=4)
+    await executor.aclose()
+
+
+def test_an_unsplittable_response_falls_back_to_one_call_per_node() -> None:
+    gateway = _DroppedBraceGateway()
+    executor = _execute_chain(gateway)
+
+    # One fused attempt, then a real call for each of the two members.
+    assert gateway.calls == 3
+    for node_id in ("draft", "polish"):
+        outcome = executor.outcomes[node_id]
+        # The bug this guards: the follower used to come back blank, COMPLETED.
+        assert outcome.output.strip(), f"{node_id} was handed an empty output"
+        assert outcome.source == "mock"
+
+
+def test_a_splittable_response_still_costs_one_call() -> None:
+    """The fallback must not fire on a well-formed response."""
+
+    class _CompliantGateway(_DroppedBraceGateway):
+        async def complete(self, *, prompt, system_prompt="", model=None, **kwargs):
+            self.calls += 1
+            return LLMResult(
+                text='{"draft": "drafted", "polish": "polished"}',
+                tokens_consumed=10,
+                cost_usd=0.0001,
+                latency_ms=1,
+                source="mock",
+                model=model or "m",
+            )
+
+    gateway = _CompliantGateway()
+    executor = _execute_chain(gateway)
+    assert gateway.calls == 1
+    assert executor.outcomes["draft"].output == "drafted"
+    assert executor.outcomes["polish"].output == "polished"
+    assert executor.outcomes["polish"].source == "fused_follower"
 
 
 # --- the planner -----------------------------------------------------------

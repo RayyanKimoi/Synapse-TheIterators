@@ -187,13 +187,20 @@ class LLMGateway:
             [{"role": "system", "content": system_prompt}] if system_prompt else []
         ) + [{"role": "user", "content": prompt}]
 
+        call: dict[str, object] = {
+            "model": model,
+            "messages": messages,
+            "api_base": api_base,
+            "max_tokens": max_tokens,
+        }
+        if not is_local:
+            # The proxy authenticates every request; a local Ollama does not.
+            # Without this the proxy answers 401 and the result is a mock that
+            # looks like a network failure.
+            call["api_key"] = self.settings.openai_api_key
+
         try:
-            response = await litellm.acompletion(
-                model=model,
-                messages=messages,
-                api_base=api_base,
-                max_tokens=max_tokens,
-            )
+            response = await litellm.acompletion(**call)
         except Exception as exc:  # offline resilience: never fail the pipeline
             return self._mock(
                 prompt, system_prompt, model, response_keys, started,

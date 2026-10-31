@@ -12,10 +12,24 @@ import pytest
 
 from app import registry
 from app.compiler.dag import build_graph
+from app.config import get_settings
 from app.llm import cache as cache_module
 from app.llm.cache import SemanticCache, get_cache
 from app.runtime import runner
 from app.runtime.paste import MIN_OBSERVATIONS, TransitionMatrix, observed_edges
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _offline_llm() -> None:
+    """The suite never calls a real model.
+
+    A developer .env pointing at a live proxy would otherwise turn every test
+    into a paid network round trip, and the deterministic latency these tests
+    assert only holds for the offline profile. Live wiring is verified by hand
+    against a real endpoint, not here.
+    """
+    settings = get_settings()
+    object.__setattr__(settings, "llm_offline_mode", True)
 
 
 @pytest.fixture(autouse=True)
