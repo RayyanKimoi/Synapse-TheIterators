@@ -13,12 +13,13 @@ from ..config import get_settings
 from ..llm.gateway import LLMGateway
 from ..models.ir import WorkflowIR
 from ..models.telemetry import PipelineType
-from ..runtime.mock_runner import stream_telemetry
+from ..runtime.runner import stream_telemetry
 
 router = APIRouter(prefix="/api/v1")
 
 # Compressing wall-clock time is a rehearsal aid; 1.0 is the real-time demo path.
 TimeScale = Annotated[float, Query(ge=1.0, le=200.0)]
+MAX_QUERY_CHARS = 2000
 
 
 class ExecuteRequest(BaseModel):
@@ -29,6 +30,8 @@ class ExecuteRequest(BaseModel):
     mode: PipelineType = PipelineType.COMPILED
     cache_warm: bool = False
     time_scale: float = Field(default=1.0, ge=1.0, le=200.0)
+    # The user request the root agents work on; defaults to the workflow name.
+    query: str | None = Field(default=None, min_length=1, max_length=MAX_QUERY_CHARS)
 
     @model_validator(mode="after")
     def _require_a_workflow(self) -> "ExecuteRequest":
@@ -47,7 +50,11 @@ def _resolve(workflow: WorkflowIR | None, workflow_id: str | None) -> WorkflowIR
 
 
 def _stream(
-    workflow: WorkflowIR, mode: PipelineType, cache_warm: bool, time_scale: float
+    workflow: WorkflowIR,
+    mode: PipelineType,
+    cache_warm: bool,
+    time_scale: float,
+    query: str | None,
 ) -> EventSourceResponse:
     settings = get_settings()
     return EventSourceResponse(
@@ -57,6 +64,7 @@ def _stream(
             cache_warm=cache_warm,
             tick_ms=settings.telemetry_tick_ms,
             time_scale=time_scale,
+            query=query,
         ),
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -97,7 +105,9 @@ async def compile_endpoint(workflow: WorkflowIR) -> CompilePlan:
 @router.post("/execute/stream")
 async def execute_stream(request: ExecuteRequest) -> EventSourceResponse:
     workflow = _resolve(request.workflow, request.workflow_id)
-    return _stream(workflow, request.mode, request.cache_warm, request.time_scale)
+    return _stream(
+        workflow, request.mode, request.cache_warm, request.time_scale, request.query
+    )
 
 
 @router.get("/execute/stream")
@@ -106,6 +116,7 @@ async def execute_stream_get(
     mode: PipelineType = PipelineType.COMPILED,
     cache_warm: bool = False,
     time_scale: TimeScale = 1.0,
+    query: Annotated[str | None, Query(min_length=1, max_length=MAX_QUERY_CHARS)] = None,
 ) -> EventSourceResponse:
     """GET variant so the browser's native EventSource can subscribe directly."""
-    return _stream(_resolve(None, workflow_id), mode, cache_warm, time_scale)
+    return _stream(_resolve(None, workflow_id), mode, cache_warm, time_scale, query)

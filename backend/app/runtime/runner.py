@@ -1,49 +1,47 @@
-"""SSE telemetry stream, driven by the live Ready-Node scheduler.
+"""SSE telemetry stream for one pipeline run.
 
-Frames are no longer a replay of a precomputed tier schedule. Both pipelines
-run through `compiler.scheduler.run_ready_nodes`; a node is reported RUNNING
-when a worker actually picks it up and COMPLETED when that worker finishes it.
+Both pipelines run through `compiler.scheduler.run_ready_nodes` with a
+`NodeExecutor` as the work coroutine: LLM nodes call the LiteLLM gateway under
+the run's budget, and a tripped circuit breaker halts everything downstream of
+the failing node. The baseline executes over a *chain* graph, which is what
+makes it serial — one code path, so the arena race compares two dispatch
+topologies rather than two formulas.
 
-The baseline pipeline executes the same way over a *chain* graph, which is what
-makes it serial — one code path, and the arena race is a genuine comparison of
-two dispatch topologies rather than two arithmetic formulas.
-
-Reported latencies still come from the deterministic profile, so the numbers
-are reproducible on stage. Swapping the `work` coroutine for real LLM calls is
-the only change needed to put live models behind this contract.
+When no model is in the loop (offline mode, or a live call that fell back to the
+mock), node latency comes from the deterministic profile, so the race is
+reproducible on stage. Once the last node terminates the IR contract is
+evaluated and carried on the final frame and on `run_complete`.
 """
 
 import asyncio
 import time
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator
+from typing import get_args
 
 import networkx as nx
 
 from ..compiler.dag import assert_acyclic, baseline_sequence, build_graph
 from ..compiler.scheduler import NodeTiming, ready_node_timings, run_ready_nodes
 from ..config import get_settings
+from ..llm.gateway import Guardrails, LLMGateway, LLMSource, RunBudget
 from ..models.ir import WorkflowIR
 from ..models.telemetry import (
     AggregateMetrics,
     CircuitBreakerStatus,
+    ContractReport,
     NodeStatus,
     NodeTelemetry,
     PipelineType,
     RunSummary,
     TelemetryFrame,
 )
-from .profile import (
-    FRESH_SINK_LATENCY_MS,
-    NodeWork,
-    ScheduledNode,
-    baseline_reference_costs,
-    build_node_work,
-)
+from .contract import evaluate_contract, final_payload
+from .executor import NodeExecutor, NodeOutcome
+from .profile import FRESH_SINK_LATENCY_MS, baseline_reference_costs, build_node_work
 
-# A later phase replaces these with measured semantic-invariance scores.
-BASELINE_CORRECTNESS_SCORE = 1.0
-COMPILED_CORRECTNESS_SCORE = 0.982
+LLM_SOURCES = frozenset(get_args(LLMSource))
 
 
 def _warm_cache_plan(graph: nx.DiGraph) -> tuple[set[str], dict[str, int]]:
@@ -70,11 +68,15 @@ def _frame(
     run_id: str,
     mode: PipelineType,
     workflow: WorkflowIR,
-    done: dict[str, ScheduledNode],
+    *,
+    outcomes: dict[str, NodeOutcome],
+    done: dict[str, NodeTiming],
     running: dict[str, int],
+    halted: dict[str, str],
     elapsed_ms: int,
-    budget_limit_usd: float,
+    budget: RunBudget,
     reference_costs: dict[str, float],
+    contract: ContractReport | None = None,
 ) -> TelemetryFrame:
     states: dict[str, NodeTelemetry] = {}
     active: list[str] = []
@@ -84,19 +86,29 @@ def _frame(
 
     for node in workflow.nodes:
         node_id = node.id
-        if node_id in done:
-            entry = done[node_id]
-            tokens += entry.tokens
-            cost += entry.cost_usd
-            # Cost avoided is booked per node as it finishes, so the scoreboard
-            # ticker only ever counts up.
-            avoided += max(reference_costs.get(node_id, 0.0) - entry.cost_usd, 0.0)
+        timing = done.get(node_id)
+        if timing is not None and not timing.failed:
+            outcome = outcomes[node_id]
+            tokens += outcome.tokens
+            cost += outcome.cost_usd
+            if outcome.cache_hit:
+                # A hit avoids the cost of the call it replaced.
+                avoided += reference_costs.get(node_id, 0.0)
             states[node_id] = NodeTelemetry(
-                status=NodeStatus.CACHED if entry.cache_hit else NodeStatus.COMPLETED,
-                latency_ms=entry.duration_ms,
-                tokens_consumed=entry.tokens,
-                cost_usd=entry.cost_usd,
-                is_cache_hit=entry.cache_hit,
+                status=NodeStatus.CACHED if outcome.cache_hit else NodeStatus.COMPLETED,
+                latency_ms=timing.end_ms - timing.start_ms,
+                tokens_consumed=outcome.tokens,
+                cost_usd=outcome.cost_usd,
+                is_cache_hit=outcome.cache_hit,
+            )
+        elif timing is not None:
+            states[node_id] = NodeTelemetry(
+                status=NodeStatus.FAILED, error=outcomes[node_id].error
+            )
+        elif node_id in halted:
+            states[node_id] = NodeTelemetry(
+                status=NodeStatus.FAILED,
+                error=f"halted: upstream node '{halted[node_id]}' failed",
             )
         elif node_id in running:
             # Tokens and cost are only booked on completion, matching the
@@ -109,25 +121,15 @@ def _frame(
         else:
             states[node_id] = NodeTelemetry()
 
-    cost = round(cost, 6)
     metrics = AggregateMetrics(
         total_tokens=tokens,
-        total_cost_usd=cost,
+        total_cost_usd=round(cost, 6),
         projected_cost_saved_usd=round(avoided, 6),
         circuit_breaker_status=(
-            CircuitBreakerStatus.TRIGGERED
-            if cost > budget_limit_usd
-            else CircuitBreakerStatus.NORMAL
+            CircuitBreakerStatus.TRIGGERED if budget.tripped else CircuitBreakerStatus.NORMAL
         ),
-        correctness_score=(
-            (
-                BASELINE_CORRECTNESS_SCORE
-                if mode is PipelineType.BASELINE
-                else COMPILED_CORRECTNESS_SCORE
-            )
-            if (done or running)
-            else 0.0
-        ),
+        # Certified only once the run has finished; see contract.evaluate_contract.
+        correctness_score=(contract.semantic_invariance or 0.0) if contract else 0.0,
     )
 
     return TelemetryFrame(
@@ -138,6 +140,7 @@ def _frame(
         active_nodes=active,
         node_states=states,
         aggregate_metrics=metrics,
+        contract=contract,
     )
 
 
@@ -149,22 +152,38 @@ async def stream_telemetry(
     tick_ms: int = 100,
     time_scale: float = 1.0,
     run_id: str | None = None,
+    query: str | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Yield sse-starlette event dicts until the run completes.
 
-    `time_scale` compresses wall-clock time without altering reported
+    `time_scale` compresses simulated latency without altering reported
     latencies — 50.0 replays a 35 s baseline in 0.7 s for tests and rehearsal.
+    With live models in the loop it is forced to 1.0: a real call cannot be
+    replayed faster.
     """
     run_id = run_id or f"run_{uuid.uuid4().hex[:8]}"
     settings = get_settings()
+    if not settings.llm_offline_mode:
+        time_scale = 1.0
 
     graph = build_graph(workflow)
     assert_acyclic(graph)
     cached, caps = _warm_cache_plan(graph) if cache_warm else (set(), {})
 
     compiled = mode is PipelineType.COMPILED
-    work: dict[str, NodeWork] = build_node_work(
+    plan = build_node_work(
         workflow, graph, compiled=compiled, cached_ids=cached, duration_caps_ms=caps
+    )
+    guardrails = Guardrails.resolve(workflow, settings)
+    budget = RunBudget(limit_usd=guardrails.budget_limit_usd)
+    executor = NodeExecutor(
+        workflow,
+        graph,
+        plan,
+        gateway=LLMGateway(settings),
+        budget=budget,
+        query=query or workflow.name,
+        time_scale=time_scale,
     )
 
     # Compiled dispatches over the real DAG; baseline over a chain of the same
@@ -175,81 +194,116 @@ async def stream_telemetry(
         else _serial_graph(baseline_sequence(graph, workflow.declaration_index()))
     )
 
-    def duration_of(node_id: str) -> int:
-        return work[node_id].duration_ms
-
-    total_ms = max(
-        (
+    # Offline, every duration is known up front, which bounds the clock so it
+    # never runs ahead of the work between frames.
+    clock_cap = (
+        max(
             timing.end_ms
-            for timing in ready_node_timings(execution_graph, duration_of).values()
-        ),
-        default=0,
+            for timing in ready_node_timings(
+                execution_graph, lambda node_id: plan[node_id].duration_ms
+            ).values()
+        )
+        if settings.llm_offline_mode
+        else None
     )
     reference_costs = baseline_reference_costs(workflow)
 
-    done: dict[str, ScheduledNode] = {}
+    done: dict[str, NodeTiming] = {}
     running: dict[str, int] = {}
+    halted: dict[str, str] = {}
 
     def on_start(node_id: str, start_ms: int) -> None:
         running[node_id] = start_ms
 
     def on_complete(timing: NodeTiming) -> None:
         running.pop(timing.node_id, None)
-        entry = work[timing.node_id]
-        done[timing.node_id] = ScheduledNode(
-            timing.node_id,
-            timing.start_ms,
-            entry.duration_ms,
-            entry.tokens,
-            entry.cost_usd,
-            entry.cache_hit,
-        )
+        done[timing.node_id] = timing
 
-    async def do_work(_node_id: str, duration_ms: int) -> None:
-        await asyncio.sleep(duration_ms / 1000 / time_scale)
+    def on_skip(nodes: frozenset[str], failed_node: str) -> None:
+        for node_id in nodes:
+            halted[node_id] = failed_node
+
+    def frame(elapsed_ms: int, contract: ContractReport | None = None) -> TelemetryFrame:
+        return _frame(
+            run_id,
+            mode,
+            workflow,
+            outcomes=executor.outcomes,
+            done=done,
+            running=running,
+            halted=halted,
+            elapsed_ms=elapsed_ms,
+            budget=budget,
+            reference_costs=reference_costs,
+            contract=contract,
+        )
 
     started = time.perf_counter()
     runner = asyncio.create_task(
         run_ready_nodes(
             execution_graph,
-            duration_ms=duration_of,
+            work=executor,
             max_concurrency=settings.max_concurrent_tasks,
-            work=do_work,
             on_start=on_start,
             on_complete=on_complete,
+            on_skip=on_skip,
         )
     )
 
+    shown_ms = 0
     try:
-        while True:
-            wall_ms = int((time.perf_counter() - started) * 1000)
-            elapsed_ms = min(int(wall_ms * time_scale), total_ms)
-            frame = _frame(
-                run_id,
-                mode,
-                workflow,
-                done,
-                running,
-                elapsed_ms,
-                workflow.budget_limit_usd,
-                reference_costs,
-            )
-            yield {"event": "telemetry_update", "data": frame.model_dump_json()}
-            if runner.done() and elapsed_ms >= total_ms:
-                break
-            await asyncio.sleep(tick_ms / 1000)
+        while not runner.done():
+            elapsed_ms = int((time.perf_counter() - started) * 1000 * time_scale)
+            if clock_cap is not None:
+                elapsed_ms = min(elapsed_ms, clock_cap)
+            shown_ms = max(shown_ms, elapsed_ms)
+            yield {"event": "telemetry_update", "data": frame(shown_ms).model_dump_json()}
+            await asyncio.wait({runner}, timeout=tick_ms / 1000)
         await runner
     finally:
         if not runner.done():
             runner.cancel()
+
+    total_ms = max((timing.end_ms for timing in done.values()), default=0)
+    sinks = [node for node in graph.nodes if graph.out_degree(node) == 0]
+    payload = final_payload(
+        {
+            node: executor.outcomes[node].output
+            for node in sinks
+            if node in done and not done[node].failed
+        }
+    )
+    contract = evaluate_contract(
+        workflow,
+        guardrails,
+        payload=payload,
+        latency_ms=total_ms,
+        cache_hits={
+            node: outcome.cache_similarity
+            for node, outcome in executor.outcomes.items()
+            if outcome.cache_hit
+        },
+        halted=bool(halted) or any(timing.failed for timing in done.values()),
+    )
+    final = frame(total_ms, contract)
+    yield {"event": "telemetry_update", "data": final.model_dump_json()}
 
     summary = RunSummary(
         run_id=run_id,
         pipeline_type=mode,
         total_elapsed_ms=total_ms,
         wall_clock_ms=int((time.perf_counter() - started) * 1000),
-        node_count=len(work),
-        cache_hits=sum(1 for state in frame.node_states.values() if state.is_cache_hit),
-        aggregate_metrics=frame.aggregate_metrics,
+        node_count=len(workflow.nodes),
+        cache_hits=sum(1 for state in final.node_states.values() if state.is_cache_hit),
+        aggregate_metrics=final.aggregate_metrics,
+        contract=contract,
+        final_output=payload,
+        llm_calls=dict(
+            Counter(
+                outcome.source
+                for outcome in executor.outcomes.values()
+                if outcome.source in LLM_SOURCES
+            )
+        ),
     )
     yield {"event": "run_complete", "data": summary.model_dump_json()}

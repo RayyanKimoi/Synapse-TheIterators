@@ -14,7 +14,7 @@ from app.llm.gateway import BudgetExceededError, LLMGateway, RunBudget
 from app.main import app
 from app.models.ir import WorkflowIR
 from app.models.telemetry import NodeStatus, PipelineType
-from app.runtime.mock_runner import stream_telemetry
+from app.runtime.runner import stream_telemetry
 
 client = TestClient(app)
 

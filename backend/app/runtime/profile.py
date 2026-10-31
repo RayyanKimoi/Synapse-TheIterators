@@ -1,10 +1,10 @@
 """Deterministic cost/latency profile and schedule builder.
 
-There is no live model in the loop yet, so per-node latency and token counts
-come from this hash-seeded profile. It is deterministic by design: the arena
-race must look identical in rehearsal and on stage. A later phase swaps
-`node_latency_ms`/`node_tokens` for measured values from the LiteLLM gateway
-and the Redis semantic cache without touching the scheduler.
+When no model is in the loop, per-node latency comes from this hash-seeded
+profile. It is deterministic by design: the arena race must look identical in
+rehearsal and on stage. At run time, LLM token counts and cost come from the
+LiteLLM gateway instead (`runtime/executor.py`); the profile's tokens feed only
+the planner's up-front projection and the cost a cache hit avoids.
 
 Placement of nodes in time is NOT computed here for the compiled pipeline.
 That belongs to the Ready-Node scheduler: this module says how long a node
