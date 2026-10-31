@@ -6,6 +6,7 @@ import { AgentMesh } from "@/components/landing/AgentMesh";
 import { AgentPipeline } from "@/components/landing/AgentPipeline";
 import { AgentRack } from "@/components/landing/AgentRack";
 import { ScrollStage } from "@/components/landing/Motion";
+import { HandoffCarousel } from "@/components/landing/HandoffCarousel";
 import { StepsDeck } from "@/components/landing/StepsDeck";
 import { Telemetry } from "@/components/landing/Telemetry";
 import { ClosingPlasma } from "@/components/ui/closing-plasma";
@@ -219,6 +220,27 @@ export default function LandingPage() {
             <div className="mt-10">
               <StepsDeck />
             </div>
+          </div>
+        </section>
+
+        {/* --------------------------------------------- workflow handoffs -- */}
+        <section className="relative z-40 border-t border-white/10 bg-void py-20">
+          <div className="mx-auto w-full max-w-7xl px-4 pl-12 sm:px-6 sm:pl-20 lg:pl-28">
+            <div data-settle className="settle max-w-3xl pb-10">
+              <p className="font-sans text-[11px] uppercase tracking-[0.3em] text-white/50">
+                The handoffs
+              </p>
+              <h2 className="mt-4 font-head text-[clamp(1.8rem,4vw,3rem)] font-extrabold leading-[1.04] tracking-[-0.028em]">
+                Six steps, one compile.
+              </h2>
+              <p className="mt-4 font-sans text-[15px] leading-relaxed text-white/60">
+                Every stage between an imperative script and a dependency-aware execution tree.
+                Drag to move through them.
+              </p>
+            </div>
+          </div>
+          <div data-settle className="settle">
+            <HandoffCarousel />
           </div>
         </section>
 

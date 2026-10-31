@@ -52,17 +52,17 @@ export function TopNav({
   onOpenTerminal,
 }: TopNavProps) {
   return (
-    <header className="relative flex flex-wrap items-center gap-3 overflow-hidden rounded-2xl border border-white/[0.08] liquid-chrome px-4 py-2.5">
+    <header className="void-card relative flex flex-wrap items-center gap-3 overflow-hidden rounded-2xl px-4 py-2.5">
       <div className="relative flex items-center gap-2.5">
-        <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-state-running/40 bg-state-running/10 text-state-running shadow-[0_0_20px_-6px_hsl(var(--state-running)/0.9)]">
+        <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-stream/35 bg-stream/10 text-stream">
           <Workflow className="h-4 w-4" />
         </span>
         <div className="leading-none">
-          <span className="text-[15px] font-semibold tracking-tight text-foreground">
-            SYNAPSE
+          <span className="font-head text-[14px] font-semibold tracking-tight text-white">
+            Execution arena
           </span>
-          <p className="mt-0.5 text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
-            Workflow Compiler
+          <p className="mt-0.5 font-sans text-[9px] uppercase tracking-[0.2em] text-white/45">
+            Baseline vs compiled
           </p>
         </div>
       </div>
@@ -137,7 +137,7 @@ export function TopNav({
         </Button>
         <Button
           size="sm"
-          className="h-9 rounded-xl text-xs font-semibold shadow-[0_0_26px_-8px_hsl(var(--state-running)/0.95)]"
+          className="h-9 rounded-xl bg-stream text-xs font-semibold text-black shadow-[0_0_26px_-8px_hsl(var(--stream)/0.95)] hover:opacity-90"
           onClick={onRunRace}
           disabled={busy}
         >

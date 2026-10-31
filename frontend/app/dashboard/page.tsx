@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AgentRoster } from "@/components/AgentRoster";
+import { TelemetryMeters } from "@/components/dashboard/TelemetryMeters";
 import { AgentTerminal } from "@/components/AgentTerminal";
 import { MatchmakerDeck } from "@/components/MatchmakerDeck";
 import { RaceArena } from "@/components/RaceArena";
@@ -109,7 +110,7 @@ export default function DashboardPage() {
   );
 
   return (
-    <main className="flex h-screen flex-col gap-3 bg-background p-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
       <TopNav
         workflows={workflows}
         selectedId={selectedId}
@@ -124,6 +125,8 @@ export default function DashboardPage() {
         busy={busy}
         onOpenTerminal={() => setTerminalOpen(true)}
       />
+
+      <TelemetryMeters workflow={workflow} plan={plan} />
 
       {loadError && (
         <div className="rounded-xl border border-state-failed/60 bg-state-failed/10 px-4 py-2 text-xs text-state-failed">
@@ -168,6 +171,6 @@ export default function DashboardPage() {
         onSelectWorkflow={setSelectedId}
         onArena={onArena}
       />
-    </main>
+    </div>
   );
 }

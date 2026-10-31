@@ -254,7 +254,8 @@
 
 @layer base {
   :root {
-    --void: 0 0% 2%;
+    --void: 0 0% 0%;          /* pitch black base */
+    --surface: 0 0% 2%;       /* #050505 raised surface */
     --stream: 83 78% 55%; /* #A3E635 lime */
     --stream-hot: 78 95% 80%;
     /* Inter: UI, metadata and body copy. Montserrat: section headers and nav.
@@ -449,5 +450,82 @@
     position: static;
     transform: none;
     filter: none;
+  }
+}
+
+/* ===========================================================================
+   NEON VOID — the shared surface language for the landing page and dashboard.
+   No solid fills: every card is frosted glass over pitch black, held by a
+   1px hairline that picks up the lime accent on hover.
+   ========================================================================= */
+
+@layer utilities {
+  .void-card {
+    position: relative;
+    background-image: linear-gradient(
+      160deg,
+      hsl(0 0% 100% / 0.10) 0%,
+      hsl(0 0% 100% / 0.035) 46%,
+      hsl(0 0% 100% / 0.06) 100%
+    );
+    backdrop-filter: blur(18px);
+    border: 1px solid hsl(0 0% 100% / 0.1);
+    transition:
+      border-color 240ms ease,
+      box-shadow 240ms ease;
+  }
+
+  .void-card-hover:hover {
+    border-color: hsl(var(--stream) / 0.34);
+    box-shadow:
+      0 0 0 1px hsl(var(--stream) / 0.12),
+      0 0 34px -8px hsl(var(--stream) / 0.4);
+  }
+
+  /* A hairline that only lights where the accent should travel. */
+  .void-rule {
+    background-image: linear-gradient(
+      to right,
+      transparent,
+      hsl(0 0% 100% / 0.1) 12%,
+      hsl(0 0% 100% / 0.1) 88%,
+      transparent
+    );
+  }
+
+  .void-input {
+    background: hsl(0 0% 100% / 0.04);
+    border: 1px solid hsl(0 0% 100% / 0.1);
+    transition:
+      border-color 200ms ease,
+      box-shadow 200ms ease;
+  }
+
+  .void-input:focus-within,
+  .void-input:focus {
+    border-color: hsl(var(--stream) / 0.5);
+    box-shadow: 0 0 0 3px hsl(var(--stream) / 0.1);
+    outline: none;
+  }
+
+  /* Status dots for the work ledger. Colour is never the only signal — every
+     row also carries the state as text. */
+  .dot-ok {
+    background: hsl(var(--stream));
+    box-shadow: 0 0 10px hsl(var(--stream) / 0.8);
+  }
+
+  .dot-wait {
+    background: hsl(35 95% 58%);
+    box-shadow: 0 0 10px hsl(35 95% 58% / 0.7);
+  }
+
+  .dot-fail {
+    background: hsl(0 84% 62%);
+    box-shadow: 0 0 10px hsl(0 84% 62% / 0.7);
+  }
+
+  .dot-idle {
+    background: hsl(0 0% 42%);
   }
 }
