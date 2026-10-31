@@ -1,6 +1,10 @@
-"""DAG construction and topological depth partitioning (PRD section 6.1).
+"""DAG construction and structural analysis (PRD V1 pass).
 
 Pure graph math over NetworkX. No runtime, cost or latency concerns live here.
+
+Depth is a *layout* label only: it positions nodes left-to-right on the arena
+canvas. It does not partition execution. Dispatch is owned by the Ready-Node
+scheduler in `scheduler.py`, which the V2 pass mandates in place of depth tiers.
 """
 
 import networkx as nx
@@ -46,7 +50,12 @@ def assert_acyclic(graph: nx.DiGraph) -> None:
 
 
 def topological_depths(graph: nx.DiGraph) -> dict[str, int]:
-    """Depth(v) = 0 when InDegree(v) = 0, else max(Depth(parents)) + 1."""
+    """Longest-path depth, used for canvas column placement only.
+
+    Depth(v) = 0 with no parents, else max(Depth(parents)) + 1. This is a static
+    label; the mutable per-node countdown that actually gates dispatch is
+    `scheduler.in_degrees`.
+    """
     depths: dict[str, int] = {}
     for node in nx.topological_sort(graph):
         parents = list(graph.predecessors(node))
@@ -54,8 +63,13 @@ def topological_depths(graph: nx.DiGraph) -> dict[str, int]:
     return depths
 
 
-def execution_tiers(workflow: WorkflowIR, depths: dict[str, int]) -> list[list[str]]:
-    """Partition into tiers T_k = {v | Depth(v) = k}; every tier runs concurrently."""
+def layout_tiers(workflow: WorkflowIR, depths: dict[str, int]) -> list[list[str]]:
+    """Group nodes by depth into canvas columns. NOT an execution partition.
+
+    The arena draws each group as a column. Nothing waits on a group boundary:
+    the Ready-Node scheduler dispatches a node the moment its own parents
+    resolve, so a fast node never blocks behind a slow unrelated sibling.
+    """
     tiers: dict[int, list[str]] = {}
     for node in workflow.nodes:  # declaration order keeps tiers stable for the UI
         tiers.setdefault(depths[node.id], []).append(node.id)

@@ -1,14 +1,19 @@
 """Compilation plan returned by POST /api/v1/compile.
 
-Runs the Phase 1 passes (validate -> cycle check -> topological depth -> tier
-partition) and reports the projected gains that feed the Optimization
-Matchmaker deck in PRD section 9.3.
+Runs the V1 passes (validate -> cycle check -> in_degree assignment) and
+reports the projected gains that feed the Optimization Matchmaker deck.
+
+`node_depths` / `execution_tiers` are retained as *canvas layout* metadata for
+the arena. They do not describe dispatch: `node_in_degrees` is the countdown
+the Ready-Node scheduler actually consumes.
 """
 
 from typing import Literal
 
+import networkx as nx
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..config import get_settings
 from ..models.ir import NodeType, WorkflowIR
 from ..runtime.profile import (
     ScheduledNode,
@@ -16,7 +21,8 @@ from ..runtime.profile import (
     build_compiled_schedule,
     schedule_latency_ms,
 )
-from .dag import assert_acyclic, baseline_sequence, build_graph, execution_tiers, topological_depths
+from .dag import assert_acyclic, baseline_sequence, build_graph, layout_tiers, topological_depths
+from .scheduler import in_degrees
 
 
 class PipelineEstimate(BaseModel):
@@ -50,6 +56,8 @@ class CompilePlan(BaseModel):
     max_depth: int
     node_depths: dict[str, int]
     execution_tiers: list[list[str]]
+    node_in_degrees: dict[str, int] = Field(default_factory=dict)
+    max_concurrency: int = 0
     baseline_sequence: list[str]
     baseline_estimate: PipelineEstimate
     compiled_estimate: PipelineEstimate
@@ -66,30 +74,49 @@ def _estimate(scheduled: dict[str, ScheduledNode]) -> PipelineEstimate:
     )
 
 
+def dispatch_groups(graph: nx.DiGraph) -> list[list[str]]:
+    """Sets of nodes the Ready-Node scheduler releases together.
+
+    A group is a fan-out point's children (they become ready on the same
+    completion event), plus the roots, which are enqueued at startup. Unlike
+    depth tiers these never act as a barrier — they only identify where
+    concurrency is actually available.
+    """
+    groups: list[list[str]] = []
+    roots = [node for node, degree in graph.in_degree() if degree == 0]
+    if len(roots) > 1:
+        groups.append(roots)
+    for node in nx.topological_sort(graph):
+        children = list(graph.successors(node))
+        if len(children) > 1:
+            groups.append(children)
+    return groups
+
+
 def _candidates(
     workflow: WorkflowIR,
-    tiers: list[list[str]],
+    graph: nx.DiGraph,
     baseline: dict[str, ScheduledNode],
     compiled: dict[str, ScheduledNode],
 ) -> list[OptimizationCandidate]:
     found: list[OptimizationCandidate] = []
 
-    for depth, tier in enumerate(tiers):
-        if len(tier) < 2:
-            continue
-        serial = sum(baseline[node_id].duration_ms for node_id in tier)
-        parallel = max(compiled[node_id].duration_ms for node_id in tier)
+    for index, group in enumerate(dispatch_groups(graph)):
+        serial = sum(baseline[node_id].duration_ms for node_id in group)
+        concurrent = max(compiled[node_id].duration_ms for node_id in group)
         found.append(
             OptimizationCandidate(
-                id=f"opt_parallelize_t{depth}",
+                id=f"opt_parallelize_{index}",
                 kind="parallelize",
-                title=f"Parallelize {len(tier)} Independent Tasks",
+                title=f"Ready-Node Speedup: {len(group)} Independent Tasks Detected",
                 rationale=(
-                    f"Tier {depth} holds {len(tier)} nodes with no data dependency "
-                    "between them; they can be dispatched concurrently via asyncio.gather."
+                    f"{len(group)} nodes become ready on the same completion event "
+                    "and share no data dependency. The Ready-Node queue dispatches "
+                    "each the instant its in_degree hits zero, so none waits on a "
+                    "slower sibling."
                 ),
-                node_ids=list(tier),
-                projected_latency_saved_ms=max(serial - parallel, 0),
+                node_ids=list(group),
+                projected_latency_saved_ms=max(serial - concurrent, 0),
                 projected_tokens_saved=0,
                 projected_cost_saved_usd=0.0,
             )
@@ -129,11 +156,12 @@ def compile_workflow(workflow: WorkflowIR) -> CompilePlan:
     assert_acyclic(graph)
 
     depths = topological_depths(graph)
-    tiers = execution_tiers(workflow, depths)
+    tiers = layout_tiers(workflow, depths)
+    pending = in_degrees(graph)
     sequence = baseline_sequence(graph, workflow.declaration_index())
 
-    baseline = build_baseline_schedule(workflow, sequence, cached_ids=set())
-    compiled = build_compiled_schedule(workflow, tiers, cached_ids=set())
+    baseline = build_baseline_schedule(workflow, sequence, set(), graph=graph)
+    compiled = build_compiled_schedule(workflow, graph, set())
     baseline_estimate = _estimate(baseline)
     compiled_estimate = _estimate(compiled)
 
@@ -164,10 +192,12 @@ def compile_workflow(workflow: WorkflowIR) -> CompilePlan:
         max_depth=max(depths.values()),
         node_depths=depths,
         execution_tiers=tiers,
+        node_in_degrees=pending,
+        max_concurrency=get_settings().max_concurrent_tasks,
         baseline_sequence=sequence,
         baseline_estimate=baseline_estimate,
         compiled_estimate=compiled_estimate,
         latency_reduction_pct=reduction,
-        optimization_candidates=_candidates(workflow, tiers, baseline, compiled),
+        optimization_candidates=_candidates(workflow, graph, baseline, compiled),
         warnings=warnings,
     )

@@ -1,12 +1,16 @@
-"""Deterministic SSE telemetry source (PRD section 8.2).
+"""SSE telemetry stream, driven by the live Ready-Node scheduler.
 
-Emits a `telemetry_update` frame every `tick_ms` and one terminal
-`run_complete` summary. Node timing comes from a schedule computed up front,
-then replayed against the wall clock, so the stopwatches in the arena are real
-while the numbers stay reproducible.
+Frames are no longer a replay of a precomputed tier schedule. Both pipelines
+run through `compiler.scheduler.run_ready_nodes`; a node is reported RUNNING
+when a worker actually picks it up and COMPLETED when that worker finishes it.
 
-Phase 3 swaps this for the live `asyncio.gather` engine behind the same event
-contract, which is what lets the frontend be built against it today.
+The baseline pipeline executes the same way over a *chain* graph, which is what
+makes it serial — one code path, and the arena race is a genuine comparison of
+two dispatch topologies rather than two arithmetic formulas.
+
+Reported latencies still come from the deterministic profile, so the numbers
+are reproducible on stage. Swapping the `work` coroutine for real LLM calls is
+the only change needed to put live models behind this contract.
 """
 
 import asyncio
@@ -16,13 +20,9 @@ from collections.abc import AsyncIterator
 
 import networkx as nx
 
-from ..compiler.dag import (
-    assert_acyclic,
-    baseline_sequence,
-    build_graph,
-    execution_tiers,
-    topological_depths,
-)
+from ..compiler.dag import assert_acyclic, baseline_sequence, build_graph
+from ..compiler.scheduler import NodeTiming, ready_node_timings, run_ready_nodes
+from ..config import get_settings
 from ..models.ir import WorkflowIR
 from ..models.telemetry import (
     AggregateMetrics,
@@ -35,14 +35,13 @@ from ..models.telemetry import (
 )
 from .profile import (
     FRESH_SINK_LATENCY_MS,
+    NodeWork,
     ScheduledNode,
     baseline_reference_costs,
-    build_baseline_schedule,
-    build_compiled_schedule,
-    schedule_latency_ms,
+    build_node_work,
 )
 
-# Phase 6 replaces these with measured semantic-invariance scores.
+# A later phase replaces these with measured semantic-invariance scores.
 BASELINE_CORRECTNESS_SCORE = 1.0
 COMPILED_CORRECTNESS_SCORE = 0.982
 
@@ -58,25 +57,21 @@ def _warm_cache_plan(graph: nx.DiGraph) -> tuple[set[str], dict[str, int]]:
     return cached, sink_caps
 
 
-def build_schedule(
-    workflow: WorkflowIR, mode: PipelineType, cache_warm: bool
-) -> dict[str, ScheduledNode]:
-    graph = build_graph(workflow)
-    assert_acyclic(graph)
-    cached, caps = _warm_cache_plan(graph) if cache_warm else (set(), {})
-
-    if mode is PipelineType.COMPILED:
-        tiers = execution_tiers(workflow, topological_depths(graph))
-        return build_compiled_schedule(workflow, tiers, cached, caps)
-
-    sequence = baseline_sequence(graph, workflow.declaration_index())
-    return build_baseline_schedule(workflow, sequence, cached, caps)
+def _serial_graph(sequence: list[str]) -> nx.DiGraph:
+    """A chain over the baseline order: every node waits for the previous one."""
+    chain = nx.DiGraph()
+    chain.add_nodes_from(sequence)
+    for before, after in zip(sequence, sequence[1:]):
+        chain.add_edge(before, after)
+    return chain
 
 
 def _frame(
     run_id: str,
     mode: PipelineType,
-    scheduled: dict[str, ScheduledNode],
+    workflow: WorkflowIR,
+    done: dict[str, ScheduledNode],
+    running: dict[str, int],
     elapsed_ms: int,
     budget_limit_usd: float,
     reference_costs: dict[str, float],
@@ -87,10 +82,10 @@ def _frame(
     cost = 0.0
     avoided = 0.0
 
-    for node_id, entry in scheduled.items():
-        if elapsed_ms < entry.start_ms:
-            states[node_id] = NodeTelemetry()
-        elif elapsed_ms >= entry.end_ms:
+    for node in workflow.nodes:
+        node_id = node.id
+        if node_id in done:
+            entry = done[node_id]
             tokens += entry.tokens
             cost += entry.cost_usd
             # Cost avoided is booked per node as it finishes, so the scoreboard
@@ -103,15 +98,17 @@ def _frame(
                 cost_usd=entry.cost_usd,
                 is_cache_hit=entry.cache_hit,
             )
-        else:
+        elif node_id in running:
             # Tokens and cost are only booked on completion, matching the
             # section 8.2 sample where RUNNING nodes report zero.
             active.append(node_id)
             states[node_id] = NodeTelemetry(
-                status=NodeStatus.RUNNING, latency_ms=elapsed_ms - entry.start_ms
+                status=NodeStatus.RUNNING,
+                latency_ms=max(elapsed_ms - running[node_id], 0),
             )
+        else:
+            states[node_id] = NodeTelemetry()
 
-    started = any(state.status is not NodeStatus.IDLE for state in states.values())
     cost = round(cost, 6)
     metrics = AggregateMetrics(
         total_tokens=tokens,
@@ -128,7 +125,7 @@ def _frame(
                 if mode is PipelineType.BASELINE
                 else COMPILED_CORRECTNESS_SCORE
             )
-            if started
+            if (done or running)
             else 0.0
         ),
     )
@@ -159,28 +156,99 @@ async def stream_telemetry(
     latencies — 50.0 replays a 35 s baseline in 0.7 s for tests and rehearsal.
     """
     run_id = run_id or f"run_{uuid.uuid4().hex[:8]}"
-    scheduled = build_schedule(workflow, mode, cache_warm)
-    total_ms = schedule_latency_ms(scheduled)
+    settings = get_settings()
+
+    graph = build_graph(workflow)
+    assert_acyclic(graph)
+    cached, caps = _warm_cache_plan(graph) if cache_warm else (set(), {})
+
+    compiled = mode is PipelineType.COMPILED
+    work: dict[str, NodeWork] = build_node_work(
+        workflow, graph, compiled=compiled, cached_ids=cached, duration_caps_ms=caps
+    )
+
+    # Compiled dispatches over the real DAG; baseline over a chain of the same
+    # nodes, so the only difference between the two runs is graph topology.
+    execution_graph = (
+        graph
+        if compiled
+        else _serial_graph(baseline_sequence(graph, workflow.declaration_index()))
+    )
+
+    def duration_of(node_id: str) -> int:
+        return work[node_id].duration_ms
+
+    total_ms = max(
+        (
+            timing.end_ms
+            for timing in ready_node_timings(execution_graph, duration_of).values()
+        ),
+        default=0,
+    )
     reference_costs = baseline_reference_costs(workflow)
 
-    started = time.perf_counter()
-    while True:
-        wall_ms = int((time.perf_counter() - started) * 1000)
-        elapsed_ms = min(int(wall_ms * time_scale), total_ms)
-        frame = _frame(
-            run_id, mode, scheduled, elapsed_ms, workflow.budget_limit_usd, reference_costs
+    done: dict[str, ScheduledNode] = {}
+    running: dict[str, int] = {}
+
+    def on_start(node_id: str, start_ms: int) -> None:
+        running[node_id] = start_ms
+
+    def on_complete(timing: NodeTiming) -> None:
+        running.pop(timing.node_id, None)
+        entry = work[timing.node_id]
+        done[timing.node_id] = ScheduledNode(
+            timing.node_id,
+            timing.start_ms,
+            entry.duration_ms,
+            entry.tokens,
+            entry.cost_usd,
+            entry.cache_hit,
         )
-        yield {"event": "telemetry_update", "data": frame.model_dump_json()}
-        if elapsed_ms >= total_ms:
-            break
-        await asyncio.sleep(tick_ms / 1000)
+
+    async def do_work(_node_id: str, duration_ms: int) -> None:
+        await asyncio.sleep(duration_ms / 1000 / time_scale)
+
+    started = time.perf_counter()
+    runner = asyncio.create_task(
+        run_ready_nodes(
+            execution_graph,
+            duration_ms=duration_of,
+            max_concurrency=settings.max_concurrent_tasks,
+            work=do_work,
+            on_start=on_start,
+            on_complete=on_complete,
+        )
+    )
+
+    try:
+        while True:
+            wall_ms = int((time.perf_counter() - started) * 1000)
+            elapsed_ms = min(int(wall_ms * time_scale), total_ms)
+            frame = _frame(
+                run_id,
+                mode,
+                workflow,
+                done,
+                running,
+                elapsed_ms,
+                workflow.budget_limit_usd,
+                reference_costs,
+            )
+            yield {"event": "telemetry_update", "data": frame.model_dump_json()}
+            if runner.done() and elapsed_ms >= total_ms:
+                break
+            await asyncio.sleep(tick_ms / 1000)
+        await runner
+    finally:
+        if not runner.done():
+            runner.cancel()
 
     summary = RunSummary(
         run_id=run_id,
         pipeline_type=mode,
         total_elapsed_ms=total_ms,
         wall_clock_ms=int((time.perf_counter() - started) * 1000),
-        node_count=len(scheduled),
+        node_count=len(work),
         cache_hits=sum(1 for state in frame.node_states.values() if state.is_cache_hit),
         aggregate_metrics=frame.aggregate_metrics,
     )
