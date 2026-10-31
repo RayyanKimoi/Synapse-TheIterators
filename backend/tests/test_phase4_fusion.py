@@ -258,6 +258,9 @@ class _DroppedBraceGateway:
 
     def __init__(self) -> None:
         self.calls = 0
+        # The executor reads the gateway's settings to decide whether tools are
+        # live; this chain has none, but the stub must honour the interface.
+        self.settings = Settings(llm_offline_mode=True)
 
     async def complete(self, *, prompt, system_prompt="", model=None, **kwargs):
         self.calls += 1

@@ -79,6 +79,25 @@ class TransitionMatrix:
             self._connection.executescript(SCHEMA)
         return self._connection
 
+    def close(self) -> None:
+        """Release the SQLite handle. On Windows an open connection is what
+        stops the file being deleted, so a reset has to be able to let go."""
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+
+    def reset(self) -> None:
+        """Forget all history without touching the file.
+
+        Preferred over deleting it: emptying the tables works while the backend
+        is running and holding a connection, so the matrix can be put back to
+        cold without stopping the server.
+        """
+        connection = self._connect()
+        with connection:
+            connection.execute("DELETE FROM transitions")
+            connection.execute("DELETE FROM node_runs")
+
     async def snapshot(self) -> dict[tuple[str, str], float]:
         """Every transition probability, read once per run.
 

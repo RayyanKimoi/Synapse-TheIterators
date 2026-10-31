@@ -39,7 +39,11 @@ class Settings(BaseSettings):
     # observational data, and losing it only costs future speculation.
     paste_db_path: Path = REPO_ROOT / ".synapse" / "paste.db"
 
-    llm_offline_mode: bool = True
+    # Off by default: the demo runs on real network calls, real tokens and real
+    # database round trips. Turning it on is an explicit choice to simulate --
+    # it switches BOTH the model and the tool clients to deterministic stubs,
+    # which is how the test suite runs with no network at all.
+    llm_offline_mode: bool = False
     telemetry_tick_ms: int = 100
     workflows_dir: Path = REPO_ROOT / "workflows"
 

@@ -17,8 +17,9 @@ Adjacent read-only LLM nodes are merged by `fusion.plan_fusion` into a single
 request: the group leader calls the model once and keeps every member's slice,
 so each follower costs a dictionary lookup rather than a round trip.
 
-Tool nodes have no live client yet and return a labelled stub, cached under the
-short real-time TTL.
+Tool nodes make their real outbound call through `runtime.tools`, cached under
+the short real-time TTL. A tool that cannot run fails its node and severs the
+branch rather than returning an invented payload.
 """
 
 import asyncio
@@ -31,11 +32,17 @@ import networkx as nx
 
 from ..compiler.scheduler import HaltBranch
 from ..llm.cache import SemanticCache, node_namespace, ttl_for
-from ..llm.gateway import BudgetExceededError, LLMGateway, RunBudget
+from ..llm.gateway import (
+    BudgetExceededError,
+    LLMGateway,
+    LLMUnavailableError,
+    RunBudget,
+)
 from ..models.ir import NodeType, WorkflowIR, WorkflowNode
 from .contract import extract_json_object
 from .fusion import FusionGroup, fused_system_prompt
 from .fusion import response_keys as fusion_response_keys
+from .tools import ToolError, run_tool
 from .profile import NodeWork, node_latency_ms
 
 logger = logging.getLogger(__name__)
@@ -89,6 +96,7 @@ class NodeExecutor:
         self.nodes = workflow.node_map()
         self.plan = plan
         self.gateway = gateway
+        self.settings = gateway.settings
         self.cache = cache
         self.scope = scope
         self.budget = budget
@@ -170,6 +178,13 @@ class NodeExecutor:
                 node.id, "", "breaker", error=f"circuit breaker: {exc}"
             )
             raise HaltBranch(str(exc)) from exc
+        except LLMUnavailableError as exc:
+            # No completion was produced. Fail the node rather than let an
+            # invented answer reach the contract check or the cache.
+            self.outcomes[node.id] = NodeOutcome(
+                node.id, "", "llm_error", error=f"model unavailable: {exc}"
+            )
+            raise HaltBranch(str(exc)) from exc
 
         merged = extract_json_object(result.text) or {}
         unfilled = [
@@ -219,16 +234,42 @@ class NodeExecutor:
         speculated = self._speculated.pop(node.id, None)
         if speculated is not None:
             started = time.perf_counter()
-            output = await speculated
+            try:
+                output = await speculated
+            except ToolError as exc:
+                return self._tool_failed(node, exc)
             # Whatever overlapped the parent's generation is already paid for;
             # only the remainder is still on the critical path. This is the
             # measured number that used to be a 0.18 multiplier.
             remaining = int((time.perf_counter() - started) * 1000 * self.time_scale)
             return NodeOutcome(node.id, output, "tool_prefetched"), remaining
 
-        duration = self.plan[node.id].duration_ms
-        await self._simulate(duration)
-        return NodeOutcome(node.id, _tool_stub(node), "tool_stub"), duration
+        try:
+            output, measured_ms = await self._tool_call(node)
+        except ToolError as exc:
+            return self._tool_failed(node, exc)
+        return NodeOutcome(node.id, output, self._tool_source()), measured_ms
+
+    def _tool_failed(self, node: WorkflowNode, exc: ToolError) -> tuple[NodeOutcome, int]:
+        """A tool that cannot run fails its node and severs the branch.
+
+        The alternative -- returning a plausible-looking payload -- would feed
+        invented search results to every agent downstream of it.
+        """
+        self.outcomes[node.id] = NodeOutcome(
+            node.id, "", "tool_error", error=f"tool failed: {exc}"
+        )
+        raise HaltBranch(str(exc)) from exc
+
+    def _tool_source(self) -> str:
+        return "tool_stub" if self.settings.llm_offline_mode else "tool_live"
+
+    async def _tool_call(self, node: WorkflowNode) -> tuple[str, int]:
+        """Run the tool, holding for the simulated duration only when offline."""
+        output, measured_ms = await run_tool(node, self.query, self.settings)
+        if self.settings.llm_offline_mode:
+            await self._simulate(measured_ms)
+        return output, measured_ms
 
     async def _tool_request(self, node: WorkflowNode) -> str:
         """The outbound tool call on its own, with no cache or bookkeeping.
@@ -236,8 +277,8 @@ class NodeExecutor:
         Safe to start before the parent has produced anything, because the
         request is determined entirely by the node's declared `params`.
         """
-        await self._simulate(node_latency_ms(node))
-        return _tool_stub(node)
+        output, _ = await self._tool_call(node)
+        return output
 
     def _speculate(self, node: WorkflowNode) -> None:
         """Fire eligible downstream tool calls now, while this node generates."""
@@ -272,6 +313,13 @@ class NodeExecutor:
         except BudgetExceededError as exc:
             self.outcomes[node.id] = NodeOutcome(
                 node.id, "", "breaker", error=f"circuit breaker: {exc}"
+            )
+            raise HaltBranch(str(exc)) from exc
+        except LLMUnavailableError as exc:
+            # No completion was produced. Fail the node rather than let an
+            # invented answer reach the contract check or the cache.
+            self.outcomes[node.id] = NodeOutcome(
+                node.id, "", "llm_error", error=f"model unavailable: {exc}"
             )
             raise HaltBranch(str(exc)) from exc
 
@@ -312,9 +360,3 @@ def _joined(question: str, context: str) -> str:
     return f"{question}\n\n{context}" if context else question
 
 
-def _tool_stub(node: WorkflowNode) -> str:
-    # No live tool client is configured yet; say so rather than invent results.
-    return json.dumps(
-        {"tool": node.tool_name, "status": "offline_stub", "params": node.params},
-        sort_keys=True,
-    )

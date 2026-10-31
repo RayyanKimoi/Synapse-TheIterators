@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "workflow_id": "wf_deep_research_v1",
   "name": "Autonomous Market Intelligence Pipeline",
-  "budget_limit_usd": 0.50,
+  "budget_limit_usd": 0.5,
   "nodes": [
     {
       "id": "node_extract_entities",
       "type": "llm_agent",
       "persona": "Taxonomy Extraction Specialist",
       "system_prompt": "Deconstruct user query into 3 targeted financial search terms.",
-      "model": "ollama/qwen2.5-7b",
+      "model": "openai/qwen2.5-3b-instruct",
       "dependencies": [],
       "params": {}
     },
@@ -19,8 +19,12 @@
       "tool_name": "tavily_search",
       "persona": "Regulatory Crawler",
       "system_prompt": "Query SEC EDGAR archives for 10-K filings.",
-      "dependencies": ["node_extract_entities"],
-      "params": { "query_vector_index": 0 }
+      "dependencies": [
+        "node_extract_entities"
+      ],
+      "params": {
+        "query_vector_index": 0
+      }
     },
     {
       "id": "node_search_sentiment",
@@ -28,8 +32,12 @@
       "tool_name": "tavily_search",
       "persona": "Market Sentiment Crawler",
       "system_prompt": "Fetch real-time financial press coverage.",
-      "dependencies": ["node_extract_entities"],
-      "params": { "query_vector_index": 1 }
+      "dependencies": [
+        "node_extract_entities"
+      ],
+      "params": {
+        "query_vector_index": 1
+      }
     },
     {
       "id": "node_search_macro",
@@ -37,15 +45,19 @@
       "tool_name": "tavily_search",
       "persona": "Macroeconomic Crawler",
       "system_prompt": "Retrieve interest rate projections and CPI metrics.",
-      "dependencies": ["node_extract_entities"],
-      "params": { "query_vector_index": 2 }
+      "dependencies": [
+        "node_extract_entities"
+      ],
+      "params": {
+        "query_vector_index": 2
+      }
     },
     {
       "id": "node_synthesize_report",
       "type": "llm_agent",
       "persona": "Executive Briefing Synthesizer",
       "system_prompt": "Synthesize regulatory, sentiment, and macro findings into a brief.",
-      "model": "ollama/qwen2.5-7b",
+      "model": "openai/qwen2.5-3b-instruct",
       "dependencies": [
         "node_search_filings",
         "node_search_sentiment",
@@ -55,7 +67,11 @@
     }
   ],
   "test_assertions": {
-    "required_output_keys": ["summary", "risk_factors", "outlook"],
+    "required_output_keys": [
+      "summary",
+      "risk_factors",
+      "outlook"
+    ],
     "min_semantic_similarity": 0.95,
     "max_acceptable_latency_ms": 15000
   }

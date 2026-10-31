@@ -6,11 +6,14 @@ Order of operations for a single completion:
   1. `llm_offline_mode` is set            -> deterministic mock, no network.
   2. model is `ollama/*`                  -> local Ollama via LiteLLM.
   3. anything else                        -> LiteLLM proxy (spend caps, tracing).
-  4. LiteLLM missing or the call raises    -> deterministic mock.
+  4. LiteLLM missing or the call raises    -> `LLMUnavailableError`.
 
-Step 4 is the point of the whole module: the venue network can disappear
-mid-demo and the pipeline still produces stable, reproducible output. A result
-served that way carries `fallback_reason`, so a silent degrade stays visible.
+The mock is reachable only through step 1, as an explicit choice. It makes the
+test suite deterministic and lets the arena be rehearsed with no network at
+all. It is never a fallback for a live run: a run with `llm_offline_mode` off
+reports a failed node instead of quietly substituting invented text, because
+nothing downstream -- the contract check, the semantic cache that would store
+the answer, the judge watching the arena -- can tell the difference.
 """
 
 import asyncio
@@ -43,6 +46,16 @@ _litellm: ModuleType | None = None
 
 class BudgetExceededError(RuntimeError):
     """Financial circuit breaker tripped (PRD: LiteLLM proxy and financial circuit breakers)."""
+
+
+class LLMUnavailableError(RuntimeError):
+    """A live model call failed and no result was produced.
+
+    Raised instead of returning a fabricated completion. Running live, an
+    invented answer is indistinguishable from a real one to everything
+    downstream -- the contract check, the semantic cache that would store it,
+    and the judge reading the arena. A failed node is at least honest.
+    """
 
 
 @dataclass(slots=True)
@@ -174,9 +187,8 @@ class LLMGateway:
     ) -> LLMResult:
         litellm = await _load_litellm()
         if litellm is None:
-            return self._mock(
-                prompt, system_prompt, model, response_keys, started,
-                fallback="litellm is not installed",
+            raise LLMUnavailableError(
+                "litellm is not installed, so no live call can be made"
             )
 
         is_local = model.startswith("ollama/")
@@ -201,11 +213,9 @@ class LLMGateway:
 
         try:
             response = await litellm.acompletion(**call)
-        except Exception as exc:  # offline resilience: never fail the pipeline
-            return self._mock(
-                prompt, system_prompt, model, response_keys, started,
-                fallback=f"{type(exc).__name__}: {exc}",
-            )
+        except Exception as exc:
+            logger.warning("live call to %s failed: %s", model, exc)
+            raise LLMUnavailableError(f"{model}: {type(exc).__name__}: {exc}") from exc
 
         usage = getattr(response, "usage", None)
         tokens = int(getattr(usage, "total_tokens", 0) or 0)
