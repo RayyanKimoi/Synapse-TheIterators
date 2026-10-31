@@ -54,6 +54,18 @@ export function useCountUp(
 
 export const formatMs = (n: number) => `${Math.round(n).toLocaleString()}`;
 export const formatSeconds = (n: number) => `${(n / 1000).toFixed(2)}s`;
+
+/** Instrument-panel stopwatch: 00:00.000 */
+export const formatStopwatch = (n: number) => {
+  const total = Math.max(0, Math.round(n));
+  const minutes = Math.floor(total / 60_000);
+  const seconds = Math.floor((total % 60_000) / 1000);
+  const millis = total % 1000;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(
+    millis,
+  ).padStart(3, "0")}`;
+};
+
 export const formatTokens = (n: number) => Math.round(n).toLocaleString();
 export const formatUsd = (n: number) => `$${n.toFixed(5)}`;
 export const formatPct = (n: number) => `${(n * 100).toFixed(1)}%`;

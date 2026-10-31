@@ -1,8 +1,7 @@
 "use client";
 
-import { CloudOff, Cpu, Flag, Play, Rocket, Zap } from "lucide-react";
+import { CloudOff, Flag, Play, Rocket, Workflow, Zap } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -42,17 +41,25 @@ export function TopNav({
   busy,
 }: TopNavProps) {
   return (
-    <header className="flex flex-wrap items-center gap-3 rounded-xl border border-border liquid-chrome px-4 py-2.5">
-      <div className="flex items-center gap-2">
-        <Cpu className="h-4 w-4 text-state-running" />
-        <span className="text-sm font-semibold tracking-tight text-foreground">SYNAPSE</span>
-        <span className="hidden text-[10px] uppercase tracking-wider text-muted-foreground sm:inline">
-          Workflow Compiler
+    <header className="relative flex flex-wrap items-center gap-3 overflow-hidden rounded-2xl border border-white/[0.08] liquid-chrome px-4 py-2.5">
+      <div className="relative flex items-center gap-2.5">
+        <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-state-running/40 bg-state-running/10 text-state-running shadow-[0_0_20px_-6px_hsl(var(--state-running)/0.9)]">
+          <Workflow className="h-4 w-4" />
         </span>
+        <div className="leading-none">
+          <span className="text-[15px] font-semibold tracking-tight text-foreground">
+            SYNAPSE
+          </span>
+          <p className="mt-0.5 text-[9px] uppercase tracking-[0.2em] text-muted-foreground">
+            Workflow Compiler
+          </p>
+        </div>
       </div>
 
+      <div className="relative h-7 w-px bg-white/[0.08]" />
+
       <Select value={selectedId ?? undefined} onValueChange={onSelect}>
-        <SelectTrigger className="h-8 w-[260px] border-border bg-background/70 text-xs">
+        <SelectTrigger className="relative h-9 w-[250px] rounded-xl border-white/[0.09] bg-background/60 text-xs">
           <SelectValue placeholder="Select a workflow" />
         </SelectTrigger>
         <SelectContent>
@@ -65,38 +72,60 @@ export function TopNav({
       </Select>
 
       {plan && (
-        <Badge variant="outline" className="border-state-completed/50 text-[10px] text-state-completed">
-          {plan.execution_tiers.length} tiers · −{plan.latency_reduction_pct}% projected
-        </Badge>
+        <div className="relative flex items-center gap-1.5">
+          <span className="rounded-full border border-state-running/40 bg-state-running/10 px-2 py-1 text-[9.5px] font-semibold uppercase tracking-wider text-state-running">
+            Ready-Node · {plan.node_count} nodes
+          </span>
+          <span className="tabular rounded-full border border-state-cached/40 bg-state-cached/10 px-2 py-1 text-[9.5px] font-semibold text-state-cached">
+            −{plan.latency_reduction_pct}% projected
+          </span>
+        </div>
       )}
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="relative ml-auto flex items-center gap-2">
         <button
           type="button"
           onClick={onToggleCacheWarm}
           aria-pressed={cacheWarm}
           className={cn(
-            "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wider transition-colors",
+            "flex min-h-[36px] items-center gap-1.5 rounded-xl border px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors",
             cacheWarm
-              ? "border-state-cached/60 bg-state-cached/10 text-state-cached"
-              : "border-border text-muted-foreground hover:text-foreground",
+              ? "border-state-cached/60 bg-state-cached/15 text-state-cached shadow-[0_0_20px_-8px_hsl(var(--state-cached)/0.9)]"
+              : "border-white/[0.09] text-muted-foreground hover:text-foreground",
           )}
         >
-          <Zap className="h-3 w-3" />
+          <Zap className={cn("h-3 w-3", cacheWarm && "fill-current")} />
           Warm cache
         </button>
 
         <HealthBadge health={health} />
 
-        <Button size="sm" variant="outline" className="h-8 text-xs" onClick={onRunBaseline} disabled={busy}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-9 rounded-xl border-white/[0.09] text-xs"
+          onClick={onRunBaseline}
+          disabled={busy}
+        >
           <Play className="mr-1 h-3 w-3" />
           Baseline
         </Button>
-        <Button size="sm" variant="outline" className="h-8 text-xs" onClick={onRunCompiled} disabled={busy}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-9 rounded-xl border-white/[0.09] text-xs"
+          onClick={onRunCompiled}
+          disabled={busy}
+        >
           <Rocket className="mr-1 h-3 w-3" />
           Compiled
         </Button>
-        <Button size="sm" className="h-8 text-xs" onClick={onRunRace} disabled={busy}>
+        <Button
+          size="sm"
+          className="h-9 rounded-xl text-xs font-semibold shadow-[0_0_26px_-8px_hsl(var(--state-running)/0.95)]"
+          onClick={onRunRace}
+          disabled={busy}
+        >
           <Flag className="mr-1 h-3 w-3" />
           Run Arena Race
         </Button>
@@ -108,25 +137,25 @@ export function TopNav({
 function HealthBadge({ health }: { health: HealthStatus | null }) {
   if (!health) {
     return (
-      <Badge variant="outline" className="border-state-failed/60 text-[10px] text-state-failed">
-        <CloudOff className="mr-1 h-3 w-3" />
-        Backend unreachable
-      </Badge>
+      <span className="flex items-center gap-1 rounded-xl border border-state-failed/60 bg-state-failed/10 px-2 py-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-state-failed">
+        <CloudOff className="h-3 w-3" />
+        Backend down
+      </span>
     );
   }
 
   const offline = health.llm.offline_mode;
   return (
-    <Badge
-      variant="outline"
+    <span
       className={cn(
-        "text-[10px]",
+        "flex items-center gap-1.5 rounded-xl border px-2 py-1.5 text-[9.5px] font-semibold uppercase tracking-wider",
         offline
-          ? "border-state-completed/50 text-state-completed"
-          : "border-state-cached/50 text-state-cached",
+          ? "border-state-completed/45 bg-state-completed/10 text-state-completed"
+          : "border-state-cached/45 bg-state-cached/10 text-state-cached",
       )}
     >
-      {offline ? "Offline mode · deterministic" : health.llm.ollama ? "Ollama live" : "Proxy live"}
-    </Badge>
+      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+      {offline ? "Offline · deterministic" : health.llm.ollama ? "Ollama live" : "Proxy live"}
+    </span>
   );
 }

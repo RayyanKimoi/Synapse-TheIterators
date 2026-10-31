@@ -1,10 +1,10 @@
 "use client";
 
-import { ShieldCheck, ShieldAlert, Timer, Coins, Gauge } from "lucide-react";
+import { Coins, Gauge, ShieldAlert, ShieldCheck, Timer } from "lucide-react";
 
 import {
   formatPct,
-  formatSeconds,
+  formatStopwatch,
   formatTokens,
   formatUsd,
   useCountUp,
@@ -31,8 +31,8 @@ export function Scoreboard({ workflow, plan }: ScoreboardProps) {
       ? 1 - compiledMs / baselineMs
       : (plan?.latency_reduction_pct ?? 0) / 100;
 
-  const baselineRef = useCountUp(baselineMs, formatSeconds, 0.12);
-  const compiledRef = useCountUp(compiledMs, formatSeconds, 0.12);
+  const baselineRef = useCountUp(baselineMs, formatStopwatch, 0.12);
+  const compiledRef = useCountUp(compiledMs, formatStopwatch, 0.12);
   const speedupRef = useCountUp(speedup, formatPct, 0.3);
   const tokensRef = useCountUp(metrics?.total_tokens ?? 0, formatTokens, 0.3);
   const costRef = useCountUp(metrics?.total_cost_usd ?? 0, formatUsd, 0.3);
@@ -43,21 +43,12 @@ export function Scoreboard({ workflow, plan }: ScoreboardProps) {
   const invarianceOk = correctness >= workflow.test_assertions.min_semantic_similarity;
 
   return (
-    <footer className="flex items-stretch gap-3 overflow-x-auto rounded-xl border border-border liquid-chrome px-4 py-2.5">
-      <Stat icon={<Timer className="h-3 w-3" />} label="Baseline">
-        <span ref={baselineRef} className="text-orange-400">
-          0.00s
-        </span>
-      </Stat>
-
-      <Stat icon={<Timer className="h-3 w-3" />} label="Compiled">
-        <span ref={compiledRef} className="text-state-running">
-          0.00s
-        </span>
-      </Stat>
+    <footer className="relative flex items-stretch gap-4 overflow-x-auto overflow-y-hidden rounded-2xl border border-white/[0.08] liquid-chrome px-4 py-3">
+      <Clock label="Baseline" tone="text-state-blocking" refObject={baselineRef} />
+      <Clock label="Compiled" tone="text-state-running" refObject={compiledRef} />
 
       <Stat icon={<Gauge className="h-3 w-3" />} label="Latency saved">
-        <span ref={speedupRef} className="text-state-cached">
+        <span ref={speedupRef} className="text-state-cached text-glow">
           0.0%
         </span>
       </Stat>
@@ -80,7 +71,7 @@ export function Scoreboard({ workflow, plan }: ScoreboardProps) {
 
       <Divider />
 
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <TrustBadge
           ok={!breakerTripped}
           label={`Budget cap $${workflow.budget_limit_usd.toFixed(2)}`}
@@ -96,6 +87,34 @@ export function Scoreboard({ workflow, plan }: ScoreboardProps) {
   );
 }
 
+/** Instrument-panel stopwatch — the number the whole demo hangs on. */
+function Clock({
+  label,
+  tone,
+  refObject,
+}: {
+  label: string;
+  tone: string;
+  refObject: React.RefObject<HTMLSpanElement>;
+}) {
+  return (
+    <div className="shrink-0">
+      <div className="flex items-center gap-1 text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
+        <Timer className="h-3 w-3" />
+        {label}
+      </div>
+      <div
+        className={cn(
+          "ticker mt-0.5 rounded-lg border border-white/[0.07] bg-background/70 px-2.5 py-1 text-[26px] font-semibold leading-none",
+          tone,
+        )}
+      >
+        <span ref={refObject}>00:00.000</span>
+      </div>
+    </div>
+  );
+}
+
 function Stat({
   icon,
   label,
@@ -106,18 +125,20 @@ function Stat({
   children: React.ReactNode;
 }) {
   return (
-    <div className="shrink-0">
-      <div className="flex items-center gap-1 text-[9px] uppercase tracking-wider text-muted-foreground">
+    <div className="flex shrink-0 flex-col justify-center">
+      <div className="flex items-center gap-1 text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
         {icon}
         {label}
       </div>
-      <div className="tabular text-base font-semibold leading-tight text-foreground">{children}</div>
+      <div className="tabular mt-1 text-[17px] font-semibold leading-tight text-foreground">
+        {children}
+      </div>
     </div>
   );
 }
 
 function Divider() {
-  return <div className="w-px shrink-0 bg-border" />;
+  return <div className="my-1 w-px shrink-0 bg-white/[0.08]" />;
 }
 
 function TrustBadge({ ok, label, value }: { ok: boolean; label: string; value: string }) {
@@ -125,11 +146,13 @@ function TrustBadge({ ok, label, value }: { ok: boolean; label: string; value: s
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1",
-        ok ? "border-state-cached/50 text-state-cached" : "border-state-failed/60 text-state-failed",
+        "flex shrink-0 items-center gap-1.5 rounded-xl border px-2.5 py-1.5",
+        ok
+          ? "border-state-cached/45 bg-state-cached/10 text-state-cached"
+          : "border-state-failed/60 bg-state-failed/10 text-state-failed",
       )}
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className="h-4 w-4" />
       <div className="leading-tight">
         <div className="text-[9px] uppercase tracking-wider opacity-80">{label}</div>
         <div className="tabular text-[11px] font-semibold">{value}</div>

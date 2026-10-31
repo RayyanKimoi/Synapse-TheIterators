@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { AgentRoster } from "@/components/AgentRoster";
+import { MatchmakerDeck } from "@/components/MatchmakerDeck";
 import { RaceArena } from "@/components/RaceArena";
 import { Scoreboard } from "@/components/Scoreboard";
 import { TopNav } from "@/components/TopNav";
@@ -46,7 +47,7 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // Compiling on selection gives us the tier layout the compiled canvas needs.
+  // Compiling on selection gives us the dependency graph the compiled canvas needs.
   useEffect(() => {
     if (!selectedId) return;
     let cancelled = false;
@@ -65,6 +66,11 @@ export default function DashboardPage() {
   }, [selectedId, setWorkflow]);
 
   const runOptions = useCallback(() => ({ cacheWarm }), [cacheWarm]);
+
+  // Approving a pass injects it and immediately shows the compiled dispatch.
+  const onApprove = useCallback(() => {
+    start("compiled", { cacheWarm });
+  }, [start, cacheWarm]);
 
   return (
     <main className="flex h-screen flex-col gap-3 bg-background p-3">
@@ -92,9 +98,18 @@ export default function DashboardPage() {
 
       {workflow ? (
         <>
-          <div className="flex min-h-0 flex-1 gap-3">
+          <div className="relative flex min-h-0 flex-1 gap-3">
             <AgentRoster workflow={workflow} plan={plan} />
             <RaceArena workflow={workflow} plan={plan} />
+
+            {/* Floating matchmaker deck over the arena's right edge. */}
+            <div className="pointer-events-none absolute bottom-3 right-3 z-20">
+              <MatchmakerDeck
+                candidates={plan?.optimization_candidates ?? []}
+                onApprove={onApprove}
+                busy={busy}
+              />
+            </div>
           </div>
           <Scoreboard workflow={workflow} plan={plan} />
         </>

@@ -1,8 +1,7 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
 import { FlowCanvas } from "@/components/FlowCanvas";
-import { formatSeconds, useCountUp } from "@/hooks/useCountUp";
+import { formatStopwatch, useCountUp } from "@/hooks/useCountUp";
 import type { CompilePlan, PipelineType, WorkflowIR } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useTelemetryStore, type RunState } from "@/store/useTelemetryStore";
@@ -15,16 +14,28 @@ type RaceArenaProps = {
 export function RaceArena({ workflow, plan }: RaceArenaProps) {
   const runs = useTelemetryStore((state) => state.runs);
 
+  // Widest point of the graph: how many nodes can actually be in flight at once.
+  const concurrency =
+    plan?.execution_tiers?.length
+      ? Math.max(...plan.execution_tiers.map((group) => group.length))
+      : 1;
+
   return (
     <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
       <Lane
         pipeline="baseline"
         title="Unoptimized Baseline"
-        subtitle="Sequential imperative execution"
+        subtitle="Sequential imperative chain · one node at a time"
         run={runs.baseline}
-        accent="text-orange-400"
+        accent="text-state-blocking"
+        rail="from-state-blocking/70"
       >
-        <FlowCanvas workflow={workflow} run={runs.baseline} sequence={plan?.baseline_sequence} />
+        <FlowCanvas
+          workflow={workflow}
+          run={runs.baseline}
+          variant="baseline"
+          sequence={plan?.baseline_sequence}
+        />
       </Lane>
 
       <Lane
@@ -32,13 +43,19 @@ export function RaceArena({ workflow, plan }: RaceArenaProps) {
         title="SYNAPSE Compiled"
         subtitle={
           plan
-            ? `${plan.execution_tiers.length} topological tiers · depth ${plan.max_depth}`
-            : "Dependency-aware parallel dispatch"
+            ? `Ready-Node scheduler · dependency graph of ${plan.node_count} nodes, ${plan.edge_count} edges · up to ${concurrency} concurrent`
+            : "Ready-Node scheduler · dependency-aware dispatch"
         }
         run={runs.compiled}
         accent="text-state-running"
+        rail="from-state-running/70"
       >
-        <FlowCanvas workflow={workflow} run={runs.compiled} tiers={plan?.execution_tiers} />
+        <FlowCanvas
+          workflow={workflow}
+          run={runs.compiled}
+          variant="compiled"
+          tiers={plan?.execution_tiers}
+        />
       </Lane>
     </div>
   );
@@ -49,6 +66,7 @@ function Lane({
   subtitle,
   run,
   accent,
+  rail,
   children,
 }: {
   pipeline: PipelineType;
@@ -56,59 +74,62 @@ function Lane({
   subtitle: string;
   run: RunState;
   accent: string;
+  rail: string;
   children: React.ReactNode;
 }) {
   const elapsed = run.frame?.elapsed_pipeline_ms ?? 0;
-  const clockRef = useCountUp(elapsed, formatSeconds, 0.12);
+  const clockRef = useCountUp(elapsed, formatStopwatch, 0.12);
 
   return (
-    <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card/40">
-      <header className="flex items-center gap-3 border-b border-border px-4 py-2.5">
+    <section className="surface grain relative flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/[0.07]">
+      {/* Lane identity rail along the top edge. */}
+      <div
+        aria-hidden
+        className={cn("h-[2px] w-full bg-gradient-to-r to-transparent", rail)}
+      />
+
+      <header className="relative flex items-center gap-3 border-b border-white/[0.07] px-4 py-2.5">
         <div className="min-w-0">
-          <h2 className="truncate text-xs font-semibold uppercase tracking-wider text-foreground">
+          <h2 className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground">
             {title}
           </h2>
-          <p className="truncate text-[11px] text-muted-foreground">{subtitle}</p>
+          <p className="truncate text-[10.5px] text-muted-foreground">{subtitle}</p>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2.5">
           <RunBadge run={run} />
-          <span ref={clockRef} className={cn("tabular text-xl font-semibold", accent)}>
-            0.00s
+          <span ref={clockRef} className={cn("ticker text-[22px] font-semibold", accent)}>
+            00:00.000
           </span>
         </div>
       </header>
 
-      <div className="pixel-canvas min-h-0 flex-1">{children}</div>
+      <div className="pixel-canvas relative min-h-0 flex-1">{children}</div>
     </section>
   );
 }
 
 function RunBadge({ run }: { run: RunState }) {
-  if (run.status === "streaming") {
-    return (
-      <Badge variant="outline" className="border-state-running/60 text-[10px] text-state-running">
-        LIVE
-      </Badge>
-    );
-  }
-  if (run.status === "done") {
-    return (
-      <Badge variant="outline" className="border-state-completed/60 text-[10px] text-state-completed">
-        DONE
-      </Badge>
-    );
-  }
-  if (run.status === "error") {
-    return (
-      <Badge variant="outline" className="border-state-failed/60 text-[10px] text-state-failed">
-        ERROR
-      </Badge>
-    );
-  }
+  const map = {
+    streaming: { label: "LIVE", tone: "border-state-running/60 text-state-running", pulse: true },
+    done: { label: "DONE", tone: "border-state-completed/60 text-state-completed", pulse: false },
+    error: { label: "ERROR", tone: "border-state-failed/60 text-state-failed", pulse: false },
+    idle: { label: "IDLE", tone: "border-white/10 text-muted-foreground", pulse: false },
+  } as const;
+
+  const { label, tone, pulse } = map[run.status];
+
   return (
-    <Badge variant="outline" className="text-[10px] text-muted-foreground">
-      IDLE
-    </Badge>
+    <span
+      className={cn(
+        "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-[0.14em]",
+        tone,
+      )}
+    >
+      {pulse && (
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
+      )}
+      {label}
+    </span>
   );
 }

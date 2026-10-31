@@ -50,6 +50,7 @@ const config: Config = {
           cached: "hsl(var(--state-cached))",
           completed: "hsl(var(--state-completed))",
           failed: "hsl(var(--state-failed))",
+          blocking: "hsl(var(--state-blocking))",
         },
       },
       borderRadius: {
