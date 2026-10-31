@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* SYNAPSE is a dark-only surface, so the tokens live on :root and `.dark` is
+   kept on <html> purely so shadcn's `dark:` variants resolve too.
+   Values are HSL triplets (not hex/oklch) so Tailwind's `/opacity` modifiers
+   keep working inside the shadcn primitives. */
+@layer base {
+  :root {
+    --background: 225 20% 4%; /* #08090C deep slate */
+    --foreground: 210 20% 98%;
+
+    --card: 225 18% 9%; /* #12141A card surface */
+    --card-foreground: 210 20% 98%;
+    --popover: 225 18% 9%;
+    --popover-foreground: 210 20% 98%;
+
+    --primary: 189 94% 43%; /* #06B6D4 electric cyan */
+    --primary-foreground: 225 20% 4%;
+    --secondary: 240 4% 16%;
+    --secondary-foreground: 210 20% 98%;
+    --muted: 240 4% 16%;
+    --muted-foreground: 240 5% 65%;
+    --accent: 258 90% 66%; /* #8B5CF6 electric violet */
+    --accent-foreground: 210 20% 98%;
+    --destructive: 0 84% 60%; /* #EF4444 crimson */
+    --destructive-foreground: 210 20% 98%;
+
+    --border: 240 4% 16%; /* #27272A zinc */
+    --input: 240 4% 16%;
+    --ring: 189 94% 43%;
+    --radius: 0.625rem;
+
+    /* Node state vocabulary (PRD 8.1) */
+    --state-idle: 240 5% 26%; /* #3F3F46 */
+    --state-running: 189 94% 43%; /* #06B6D4 */
+    --state-cached: 160 84% 39%; /* #10B981 */
+    --state-completed: 258 90% 66%; /* #8B5CF6 */
+    --state-failed: 0 84% 60%; /* #EF4444 */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+@layer utilities {
+  /* Liquid-chrome accent for command surfaces: a cool metallic sweep that
+     reads as glass over the deep slate background. */
+  .liquid-chrome {
+    background-image: linear-gradient(
+      120deg,
+      hsl(225 18% 11% / 0.95) 0%,
+      hsl(225 16% 16% / 0.92) 22%,
+      hsl(200 30% 24% / 0.78) 44%,
+      hsl(225 16% 14% / 0.92) 68%,
+      hsl(225 18% 10% / 0.95) 100%
+    );
+  }
+
+  /* Faint pixel grid behind the execution arena. */
+  .pixel-canvas {
+    background-image:
+      linear-gradient(to right, hsl(240 4% 16% / 0.5) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(240 4% 16% / 0.5) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+}
+
+/* React Flow surfaces inherit the slate background rather than its default white. */
+.react-flow__attribution {
+  background: transparent !important;
+  color: hsl(240 5% 26%) !important;
+  font-size: 9px;
+}
