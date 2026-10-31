@@ -96,9 +96,14 @@ def test_topological_tiers_partition_independent_nodes(workflow: WorkflowIR) -> 
 def test_compiled_plan_beats_baseline(workflow: WorkflowIR) -> None:
     plan = compile_workflow(workflow)
     assert plan.compiled_estimate.latency_ms < plan.baseline_estimate.latency_ms
-    assert plan.latency_reduction_pct > 50.0
+    # Parallelism alone, with no history and nothing fusable: 45.7%. The 0.55
+    # mock used to inflate this past 50%. PASTE takes the warm figure to 57.9%
+    # (see test_phase3_paste.py).
+    assert plan.latency_reduction_pct > 40.0
     kinds = {candidate.kind for candidate in plan.optimization_candidates}
-    assert kinds == {"parallelize", "prompt_fusion"}
+    # Ready-Node parallelism is all this workflow offers a cold compiler: it has
+    # no adjacent LLM pair to fuse, and with no history PASTE cannot speculate.
+    assert kinds == {"parallelize"}
 
 
 def test_cycle_is_rejected() -> None:
@@ -153,9 +158,12 @@ def test_compiled_stream_is_faster_than_baseline(workflow: WorkflowIR) -> None:
     compiled = _collect(workflow=workflow, mode=PipelineType.COMPILED)[-1][1]
     baseline = _collect(workflow=workflow, mode=PipelineType.BASELINE)[-1][1]
     assert compiled["total_elapsed_ms"] < baseline["total_elapsed_ms"]
-    # PRD demo target: ~35 s baseline collapsing to ~8 s compiled.
     assert 30_000 <= baseline["total_elapsed_ms"] <= 40_000
-    assert 6_000 <= compiled["total_elapsed_ms"] <= 11_000
+    # Compressed time flatters the compiled run: the embedding cost is real and
+    # does not scale with time_scale, so speculation appears to hide more than
+    # it can. test_phase3_paste.py pins the real-time figure (14.7 s) through
+    # the planner projection, which agrees with a time_scale=1.0 run to 0.2%.
+    assert 9_000 <= compiled["total_elapsed_ms"] <= 14_500
 
 
 def test_warm_cache_run_collapses_latency_but_keeps_a_finish_line(
@@ -172,7 +180,9 @@ def test_warm_cache_run_collapses_latency_but_keeps_a_finish_line(
     # A fully cached run would report 0 ms, which divides badly in the DOM
     # stopwatches downstream.
     assert summary["total_elapsed_ms"] > 0
-    assert summary["total_elapsed_ms"] < 4_000  # cold compiled is ~8.8 s
+    # The uncached terminal agent is the whole remaining cost; cold compiled
+    # over the same graph is ~10.5 s at this time_scale.
+    assert summary["total_elapsed_ms"] < 6_500
     assert summary["aggregate_metrics"]["projected_cost_saved_usd"] > 0
 
 
@@ -186,14 +196,34 @@ def test_cached_nodes_report_zero_tokens(workflow: WorkflowIR) -> None:
     assert all(s["latency_ms"] < 100 for s in cached)
 
 
-def test_telemetry_is_deterministic(workflow: WorkflowIR) -> None:
-    first = _collect(workflow=workflow, mode=PipelineType.COMPILED)[-1][1]
+def test_baseline_telemetry_is_deterministic(workflow: WorkflowIR) -> None:
+    """The latency/cost profile is hash-seeded, so the unoptimised pipeline
+    reproduces exactly -- the arena race has to look the same on stage as in
+    rehearsal."""
+    first = _collect(workflow=workflow, mode=PipelineType.BASELINE)[-1][1]
     # Without this the second run would legitimately be served from the first
     # one, which is the cache working -- but not what this test is measuring.
     get_cache.cache_clear()
-    second = _collect(workflow=workflow, mode=PipelineType.COMPILED)[-1][1]
+    second = _collect(workflow=workflow, mode=PipelineType.BASELINE)[-1][1]
     assert first["total_elapsed_ms"] == second["total_elapsed_ms"]
     assert first["aggregate_metrics"] == second["aggregate_metrics"]
+
+
+def test_compiled_spend_is_deterministic_even_though_its_clock_is_not(
+    workflow: WorkflowIR,
+) -> None:
+    """PASTE reports the *measured* remainder of a speculated call, so compiled
+    latency now moves with real race timing instead of a fixed multiplier. What
+    the run costs is still exact."""
+    first = _collect(workflow=workflow, mode=PipelineType.COMPILED)[-1][1]
+    get_cache.cache_clear()
+    second = _collect(workflow=workflow, mode=PipelineType.COMPILED)[-1][1]
+
+    for metric in ("total_tokens", "total_cost_usd"):
+        assert first["aggregate_metrics"][metric] == second["aggregate_metrics"][metric]
+    assert first["total_elapsed_ms"] == pytest.approx(
+        second["total_elapsed_ms"], rel=0.35
+    )
 
 
 # --- gateway ---------------------------------------------------------------

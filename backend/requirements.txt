@@ -17,5 +17,11 @@ litellm>=1.40
 fastembed>=0.3
 redis>=5.0
 
+# DSPy declares and validates the fused signature in app/runtime/fusion.py.
+# Imported lazily; without it the signature is rendered directly. Execution
+# stays on the gateway either way, so the budget breaker and cost accounting
+# are never bypassed.
+dspy-ai>=2.5
+
 # uvloop is POSIX-only; uvicorn picks it up automatically when installed.
 uvloop>=0.19; sys_platform != "win32"

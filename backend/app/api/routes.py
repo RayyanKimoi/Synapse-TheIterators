@@ -13,6 +13,7 @@ from ..config import get_settings
 from ..llm.gateway import LLMGateway
 from ..models.ir import WorkflowIR
 from ..models.telemetry import PipelineType
+from ..runtime.paste import get_matrix
 from ..runtime.runner import stream_telemetry
 
 router = APIRouter(prefix="/api/v1")
@@ -95,7 +96,7 @@ async def get_workflow(workflow_id: str) -> WorkflowIR:
 async def compile_endpoint(workflow: WorkflowIR) -> CompilePlan:
     """Validate the IR, reject cycles, and return the tiered execution plan."""
     try:
-        return compile_workflow(workflow)
+        return compile_workflow(workflow, await get_matrix().snapshot())
     except CompileError as exc:
         raise HTTPException(
             status_code=400, detail={"message": exc.message, "cycle": exc.cycle}

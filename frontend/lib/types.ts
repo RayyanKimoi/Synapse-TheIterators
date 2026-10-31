@@ -82,7 +82,7 @@ export type PipelineEstimate = {
 
 export type OptimizationCandidate = {
   id: string;
-  kind: "parallelize" | "prompt_fusion";
+  kind: "parallelize" | "prompt_fusion" | "speculative_prefetch";
   title: string;
   rationale: string;
   node_ids: string[];

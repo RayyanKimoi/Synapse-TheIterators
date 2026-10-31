@@ -13,12 +13,17 @@ Cache namespaces are scoped per pipeline as well as per node: the arena races
 the baseline and the compiled run on the same query, and a shared cache would
 let whichever ran second answer entirely from the first one's work.
 
+Adjacent read-only LLM nodes are merged by `fusion.plan_fusion` into a single
+request: the group leader calls the model once and keeps every member's slice,
+so each follower costs a dictionary lookup rather than a round trip.
+
 Tool nodes have no live client yet and return a labelled stub, cached under the
 short real-time TTL.
 """
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 
 import networkx as nx
@@ -27,15 +32,17 @@ from ..compiler.scheduler import HaltBranch
 from ..llm.cache import SemanticCache, node_namespace, ttl_for
 from ..llm.gateway import BudgetExceededError, LLMGateway, RunBudget
 from ..models.ir import NodeType, WorkflowIR, WorkflowNode
-from .profile import NodeWork
+from .contract import extract_json_object
+from .fusion import FusionGroup, fused_system_prompt
+from .profile import NodeWork, node_latency_ms
 
 
 @dataclass(frozen=True, slots=True)
 class NodeOutcome:
     node_id: str
     output: str
-    # litellm_proxy | ollama | mock (gateway), tool_stub, cache_redis,
-    # cache_memory, breaker
+    # litellm_proxy | ollama | mock (gateway), tool_stub, tool_prefetched,
+    # cache_redis, cache_memory, breaker
     source: str
     tokens: int = 0
     cost_usd: float = 0.0
@@ -61,9 +68,17 @@ class NodeExecutor:
         budget: RunBudget,
         query: str,
         time_scale: float,
+        prefetch: frozenset[str] = frozenset(),
+        fusion: dict[str, FusionGroup] | None = None,
         prime: bool = False,
     ) -> None:
         self.prime = prime
+        self.graph = graph
+        self.prefetch = prefetch
+        self.fusion = fusion or {}
+        self._speculated: dict[str, asyncio.Task[str]] = {}
+        # Follower output waiting to be collected, written by the group leader.
+        self._fused_slices: dict[str, str] = {}
         self.nodes = workflow.node_map()
         self.plan = plan
         self.gateway = gateway
@@ -99,6 +114,8 @@ class NodeExecutor:
 
         if node.type is NodeType.TOOL_IO:
             outcome, duration = await self._run_tool(node)
+        elif node_id in self.fusion:
+            outcome, duration = await self._run_fused(node, _joined(question, context))
         else:
             outcome, duration = await self._run_llm(node, _joined(question, context))
 
@@ -115,13 +132,109 @@ class NodeExecutor:
         self.outcomes[node.id] = outcome
         return duration
 
+    async def _run_fused(self, node: WorkflowNode, prompt: str) -> tuple[NodeOutcome, int]:
+        """One member of a fused chain.
+
+        The leader issues the single merged request and keeps every member's
+        slice; each follower then costs a dictionary lookup instead of a round
+        trip. Tokens and spend are booked once, on the leader, because one call
+        was made -- counting them again per follower would invent usage.
+        """
+        group = self.fusion[node.id]
+        if node.id != group.leader:
+            slice_text = self._fused_slices.pop(node.id, "")
+            return NodeOutcome(node.id, slice_text, "fused_follower"), 0
+
+        planned = self.plan[node.id]
+        self._speculate(node)
+        try:
+            result = await self.gateway.complete(
+                prompt=prompt,
+                system_prompt=fused_system_prompt(group),
+                model=node.model,
+                # One call now carries every member's output.
+                max_tokens=512 * len(group.members),
+                budget=self.budget,
+                response_keys=None,  # the fused signature already states them
+            )
+        except BudgetExceededError as exc:
+            self.outcomes[node.id] = NodeOutcome(
+                node.id, "", "breaker", error=f"circuit breaker: {exc}"
+            )
+            raise HaltBranch(str(exc)) from exc
+
+        merged = extract_json_object(result.text) or {}
+        for member, field in group.fields.items():
+            if member != node.id:
+                self._fused_slices[member] = str(merged.get(field, ""))
+
+        if result.source == "mock":
+            await self._simulate(planned.duration_ms - result.latency_ms)
+            duration = planned.duration_ms
+        else:
+            duration = result.latency_ms
+
+        leader_field = group.fields[node.id]
+        return (
+            NodeOutcome(
+                node.id,
+                str(merged.get(leader_field, result.text)),
+                # The raw gateway source, so `llm_calls` still counts the one
+                # request the group made. `fused_follower` is what marks the
+                # calls fusion removed.
+                result.source,
+                tokens=result.tokens_consumed,
+                cost_usd=result.cost_usd,
+            ),
+            duration,
+        )
+
     async def _run_tool(self, node: WorkflowNode) -> tuple[NodeOutcome, int]:
+        speculated = self._speculated.pop(node.id, None)
+        if speculated is not None:
+            started = time.perf_counter()
+            output = await speculated
+            # Whatever overlapped the parent's generation is already paid for;
+            # only the remainder is still on the critical path. This is the
+            # measured number that used to be a 0.18 multiplier.
+            remaining = int((time.perf_counter() - started) * 1000 * self.time_scale)
+            return NodeOutcome(node.id, output, "tool_prefetched"), remaining
+
         duration = self.plan[node.id].duration_ms
         await self._simulate(duration)
         return NodeOutcome(node.id, _tool_stub(node), "tool_stub"), duration
 
+    async def _tool_request(self, node: WorkflowNode) -> str:
+        """The outbound tool call on its own, with no cache or bookkeeping.
+
+        Safe to start before the parent has produced anything, because the
+        request is determined entirely by the node's declared `params`.
+        """
+        await self._simulate(node_latency_ms(node))
+        return _tool_stub(node)
+
+    def _speculate(self, node: WorkflowNode) -> None:
+        """Fire eligible downstream tool calls now, while this node generates."""
+        for child_id in self.graph.successors(node.id):
+            if child_id in self.prefetch and child_id not in self._speculated:
+                self._speculated[child_id] = asyncio.create_task(
+                    self._tool_request(self.nodes[child_id])
+                )
+
+    async def aclose(self) -> None:
+        """Drop speculations nothing ended up waiting for -- a branch that
+        halted, or a tool the cache answered after the request was already out."""
+        pending = list(self._speculated.values())
+        self._speculated.clear()
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
     async def _run_llm(self, node: WorkflowNode, prompt: str) -> tuple[NodeOutcome, int]:
         planned = self.plan[node.id]
+        # Before the await, so the tool requests overlap the decode rather than
+        # queueing behind it.
+        self._speculate(node)
         try:
             result = await self.gateway.complete(
                 prompt=prompt,

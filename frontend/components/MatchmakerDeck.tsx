@@ -8,9 +8,11 @@ import {
   Coins,
   GitBranch,
   Layers,
+  type LucideIcon,
   Sparkles,
   Timer,
   X,
+  Zap,
 } from "lucide-react";
 
 import { prefersReducedMotion } from "@/hooks/useCountUp";
@@ -18,6 +20,17 @@ import type { OptimizationCandidate } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const SWIPE_THRESHOLD = 104;
+
+/** Keyed by every `kind` the compiler emits, so a new pass cannot fall through
+ *  to another pass's icon the way a two-way ternary let it. */
+const KIND_PRESENTATION: Record<
+  OptimizationCandidate["kind"],
+  { icon: LucideIcon; label: string }
+> = {
+  parallelize: { icon: GitBranch, label: "Ready-Node dispatch" },
+  prompt_fusion: { icon: Layers, label: "DSPy prompt fusion" },
+  speculative_prefetch: { icon: Zap, label: "PASTE speculative prefetch" },
+};
 
 type MatchmakerDeckProps = {
   candidates: OptimizationCandidate[];
@@ -164,7 +177,7 @@ export function MatchmakerDeck({ candidates, onApprove, busy }: MatchmakerDeckPr
     );
   }
 
-  const Icon = current.kind === "parallelize" ? GitBranch : Layers;
+  const { icon: Icon, label: kindLabel } = KIND_PRESENTATION[current.kind];
 
   return (
     <div className="pointer-events-auto w-[320px]">
@@ -234,7 +247,7 @@ export function MatchmakerDeck({ candidates, onApprove, busy }: MatchmakerDeckPr
                   {current.title}
                 </h3>
                 <span className="mt-0.5 inline-block rounded-full border border-white/10 px-1.5 py-px text-[9px] uppercase tracking-wider text-muted-foreground">
-                  {current.kind === "parallelize" ? "Ready-Node dispatch" : "DSPy prompt fusion"}
+                  {kindLabel}
                 </span>
               </div>
             </div>

@@ -41,6 +41,8 @@ from ..models.telemetry import (
 )
 from .contract import evaluate_contract, final_payload
 from .executor import NodeExecutor, NodeOutcome
+from .fusion import plan_fusion
+from .paste import TransitionMatrix, get_matrix, observed_edges, prefetchable
 from .profile import NodeWork, baseline_reference_costs, build_node_work
 
 LLM_SOURCES = frozenset(get_args(LLMSource))
@@ -149,6 +151,7 @@ async def stream_telemetry(
     run_id: str | None = None,
     query: str | None = None,
     cache: SemanticCache | None = None,
+    matrix: TransitionMatrix | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Yield sse-starlette event dicts until the run completes.
 
@@ -166,7 +169,19 @@ async def stream_telemetry(
     assert_acyclic(graph)
 
     compiled = mode is PipelineType.COMPILED
-    plan = build_node_work(workflow, graph, compiled=compiled)
+    matrix = matrix if matrix is not None else get_matrix()
+    # Only the compiled pipeline speculates; the baseline is the unoptimised
+    # control, and giving it PASTE would erase what the arena is comparing.
+    prefetch = (
+        prefetchable(graph, workflow.node_map(), await matrix.snapshot())
+        if compiled
+        else frozenset()
+    )
+    # Fusion is a compiler pass, so the unoptimised baseline does not get it.
+    fusion = plan_fusion(workflow, graph) if compiled else {}
+    plan = build_node_work(
+        workflow, graph, compiled=compiled, prefetch=prefetch, fusion=fusion
+    )
     guardrails = Guardrails.resolve(workflow, settings)
     budget = RunBudget(limit_usd=guardrails.budget_limit_usd)
     gateway = LLMGateway(settings)
@@ -188,6 +203,8 @@ async def stream_telemetry(
         budget=budget,
         query=query,
         time_scale=time_scale,
+        prefetch=prefetch,
+        fusion=fusion,
     )
 
     # Compiled dispatches over the real DAG; baseline over a chain of the same
@@ -267,6 +284,7 @@ async def stream_telemetry(
     finally:
         if not runner.done():
             runner.cancel()
+        await executor.aclose()
 
     total_ms = max((timing.end_ms for timing in done.values()), default=0)
     sinks = [node for node in graph.nodes if graph.out_degree(node) == 0]
@@ -292,6 +310,11 @@ async def stream_telemetry(
     )
     final = frame(total_ms, contract)
     yield {"event": "telemetry_update", "data": final.model_dump_json()}
+
+    # History for the next run: the declared DAG, not the chain the baseline
+    # executed over.
+    executed = [node for node, timing in done.items() if not timing.failed]
+    await matrix.record_run(executed, observed_edges(graph, executed))
 
     summary = RunSummary(
         run_id=run_id,

@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     max_budget_per_workflow_usd: float = Field(default=0.50, gt=0.0)
     max_concurrent_tasks: int = 8
 
+    # PASTE transition history. A local file, not a service: it is per-deployment
+    # observational data, and losing it only costs future speculation.
+    paste_db_path: Path = REPO_ROOT / ".synapse" / "paste.db"
+
     llm_offline_mode: bool = True
     telemetry_tick_ms: int = 100
     workflows_dir: Path = REPO_ROOT / "workflows"

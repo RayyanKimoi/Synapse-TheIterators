@@ -4,6 +4,7 @@ TTL, and the in-memory fallback when Redis is unavailable."""
 import asyncio
 import json
 import time
+from collections.abc import Iterator
 
 import pytest
 
@@ -12,6 +13,7 @@ from pydantic import ValidationError
 from app import registry
 from app.config import Settings
 from app.llm.cache import (
+    KEY_PREFIX,
     REASONING_TTL_S,
     TOOL_TTL_S,
     SemanticCache,
@@ -269,6 +271,131 @@ def test_an_expired_entry_is_not_served_and_is_evicted(cache: SemanticCache) -> 
     _, hit = asyncio.run(scenario())
     assert hit is None
     assert cache._memory["n"] == {}  # evicted on read, not left to grow
+
+
+# --- live Redis ------------------------------------------------------------
+
+
+def _redis_live() -> bool:
+    try:
+        import redis
+
+        redis.Redis(host="localhost", port=6379, socket_connect_timeout=0.5).ping()
+        return True
+    except Exception:
+        return False
+
+
+requires_redis = pytest.mark.skipif(
+    not _redis_live(), reason="needs a local Redis on :6379"
+)
+
+
+@pytest.fixture
+def redis_cache() -> Iterator[SemanticCache]:
+    """A cache on the real backend, whose keys are purged afterwards."""
+    import redis
+
+    live = SemanticCache(Settings())
+    yield live
+    client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+    keys = list(client.scan_iter(match=f"{KEY_PREFIX}:*"))
+    if keys:
+        client.delete(*keys)
+
+
+@requires_redis
+def test_redis_is_selected_and_round_trips_the_vector_exactly(
+    redis_cache: SemanticCache,
+) -> None:
+    """384 floats through JSON and back. Lossy serialization here would quietly
+    shift every similarity score the cache computes."""
+
+    async def scenario():
+        vectors, _ = await redis_cache.probe("rt", query="rate outlook", context="ctx")
+        await redis_cache.store(
+            "rt",
+            query="rate outlook",
+            context="ctx",
+            text="macro brief",
+            vectors=vectors,
+            ttl_s=60,
+        )
+        stored = await redis_cache._entries("rt")
+        return vectors, stored, await redis_cache.probe(
+            "rt", query="rate outlook", context="ctx"
+        )
+
+    vectors, stored, (_, hit) = asyncio.run(scenario())
+    assert redis_cache.backend == "redis"
+    assert len(vectors[0]) == 384
+    assert stored[0][0] == vectors  # bit-exact after the round trip
+    assert hit is not None and hit.similarity == 1.0 and hit.backend == "redis"
+
+
+@requires_redis
+def test_redis_serves_a_paraphrase(redis_cache: SemanticCache) -> None:
+    async def scenario():
+        vectors, _ = await redis_cache.probe(
+            "para", query="NVIDIA supply chain risk", context="ctx"
+        )
+        await redis_cache.store(
+            "para",
+            query="NVIDIA supply chain risk",
+            context="ctx",
+            text="brief",
+            vectors=vectors,
+            ttl_s=60,
+        )
+        return await redis_cache.probe(
+            "para", query="supply chain risks for NVIDIA", context="ctx"
+        )
+
+    _, hit = asyncio.run(scenario())
+    assert hit is not None and redis_cache.threshold <= hit.similarity < 1.0
+
+
+@requires_redis
+def test_dynamic_ttl_reaches_the_redis_key(redis_cache: SemanticCache) -> None:
+    """The TTL has to be on the key itself; expiry is Redis's job, not ours."""
+    import redis
+
+    async def scenario():
+        vectors, _ = await redis_cache.probe("ttl", query="q", context="c")
+        for namespace, ttl in (("ttl_tool", TOOL_TTL_S), ("ttl_llm", REASONING_TTL_S)):
+            await redis_cache.store(
+                namespace,
+                query="q",
+                context="c",
+                text="t",
+                vectors=vectors,
+                ttl_s=ttl,
+            )
+
+    asyncio.run(scenario())
+    client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+    for namespace, expected in (("ttl_tool", TOOL_TTL_S), ("ttl_llm", REASONING_TTL_S)):
+        key = next(client.scan_iter(match=redis_cache._key(namespace, "*")))
+        assert client.ttl(key) == pytest.approx(expected, abs=2)
+
+
+@requires_redis
+def test_concurrent_probes_share_the_connection_pool(
+    redis_cache: SemanticCache,
+) -> None:
+    """The fan-out dispatches tool nodes together, so probes land concurrently."""
+
+    async def scenario():
+        return await asyncio.gather(
+            *[
+                redis_cache.probe(f"pool{index}", query=f"q{index}", context="ctx")
+                for index in range(24)
+            ]
+        )
+
+    results = asyncio.run(scenario())
+    assert len(results) == 24
+    assert all(hit is None for _, hit in results)  # distinct namespaces, all cold
 
 
 # --- Redis fallback --------------------------------------------------------

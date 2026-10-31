@@ -15,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import get_settings
 from ..models.ir import NodeType, WorkflowIR
+from ..runtime.fusion import FusionGroup, plan_fusion
+from ..runtime.paste import PREFETCH_THRESHOLD, Snapshot, prefetchable
 from ..runtime.profile import (
     ScheduledNode,
     build_baseline_schedule,
@@ -37,7 +39,7 @@ class OptimizationCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    kind: Literal["parallelize", "prompt_fusion"]
+    kind: Literal["parallelize", "prompt_fusion", "speculative_prefetch"]
     title: str
     rationale: str
     node_ids: list[str]
@@ -98,6 +100,9 @@ def _candidates(
     graph: nx.DiGraph,
     baseline: dict[str, ScheduledNode],
     compiled: dict[str, ScheduledNode],
+    fusion: dict[str, FusionGroup],
+    prefetch: frozenset[str],
+    snapshot: Snapshot,
 ) -> list[OptimizationCandidate]:
     found: list[OptimizationCandidate] = []
 
@@ -122,38 +127,83 @@ def _candidates(
             )
         )
 
-    for node in workflow.nodes:
-        if node.type is not NodeType.LLM_AGENT or len(node.dependencies) < 2:
-            continue
-        tokens_saved = baseline[node.id].tokens - compiled[node.id].tokens
+    nodes = workflow.node_map()
+    for leader in sorted({group.leader for group in fusion.values()}):
+        group = fusion[leader]
+        members = list(group.members)
+        personas = " -> ".join(nodes[member].persona for member in members)
         found.append(
             OptimizationCandidate(
-                id=f"opt_fusion_{node.id}",
+                id=f"opt_fusion_{group.leader}",
                 kind="prompt_fusion",
-                title=f"Prompt Fusion: Merge {node.persona} Context",
+                title=f"Prompt Fusion: {len(members)} Adjacent Agents, One Call",
                 rationale=(
-                    f"'{node.id}' fans in {len(node.dependencies)} upstream contexts. "
-                    "Fusing them into one structured prompt removes redundant "
-                    "round-trips and shrinks the KV cache footprint."
+                    f"{personas} form a private read-only chain on {group.model}. "
+                    "Merging them into one DSPy signature issues a single request "
+                    "instead of one per agent, so the shared context is prefilled "
+                    "once and only one KV cache is held."
                 ),
-                node_ids=[node.id, *node.dependencies],
+                node_ids=members,
                 projected_latency_saved_ms=max(
-                    baseline[node.id].duration_ms - compiled[node.id].duration_ms, 0
+                    sum(baseline[member].duration_ms for member in members)
+                    - sum(compiled[member].duration_ms for member in members),
+                    0,
                 ),
-                projected_tokens_saved=max(tokens_saved, 0),
+                projected_tokens_saved=max(
+                    sum(baseline[member].tokens for member in members)
+                    - sum(compiled[member].tokens for member in members),
+                    0,
+                ),
                 projected_cost_saved_usd=round(
-                    max(baseline[node.id].cost_usd - compiled[node.id].cost_usd, 0.0), 6
+                    max(
+                        sum(baseline[member].cost_usd for member in members)
+                        - sum(compiled[member].cost_usd for member in members),
+                        0.0,
+                    ),
+                    6,
                 ),
+            )
+        )
+
+    for node_id in sorted(prefetch):
+        probability = max(
+            snapshot.get((parent, node_id), 0.0) for parent in graph.predecessors(node_id)
+        )
+        found.append(
+            OptimizationCandidate(
+                id=f"opt_prefetch_{node_id}",
+                kind="speculative_prefetch",
+                title=f"PASTE: Speculate {nodes[node_id].persona}",
+                rationale=(
+                    f"History says '{node_id}' follows its parent "
+                    f"{probability:.0%} of the time, clearing the "
+                    f"{PREFETCH_THRESHOLD:.0%} gate. Firing the request when the "
+                    "parent starts generating overlaps the round trip with the "
+                    "decode instead of queueing behind it."
+                ),
+                node_ids=[node_id, *nodes[node_id].dependencies],
+                projected_latency_saved_ms=max(
+                    baseline[node_id].duration_ms - compiled[node_id].duration_ms, 0
+                ),
+                projected_tokens_saved=0,
+                projected_cost_saved_usd=0.0,
             )
         )
 
     return found
 
 
-def compile_workflow(workflow: WorkflowIR) -> CompilePlan:
-    """Raises CompileError when the graph is cyclic."""
+def compile_workflow(workflow: WorkflowIR, snapshot: Snapshot | None = None) -> CompilePlan:
+    """Raises CompileError when the graph is cyclic.
+
+    `snapshot` is the PASTE transition matrix. Without it the projection simply
+    models no speculation, which under-promises rather than over-promises.
+    """
     graph = build_graph(workflow)
     assert_acyclic(graph)
+    snapshot = snapshot or {}
+    prefetch = prefetchable(graph, workflow.node_map(), snapshot)
+    fusion = plan_fusion(workflow, graph)
 
     depths = topological_depths(graph)
     tiers = layout_tiers(workflow, depths)
@@ -161,7 +211,9 @@ def compile_workflow(workflow: WorkflowIR) -> CompilePlan:
     sequence = baseline_sequence(graph, workflow.declaration_index())
 
     baseline = build_baseline_schedule(workflow, sequence, graph=graph)
-    compiled = build_compiled_schedule(workflow, graph)
+    compiled = build_compiled_schedule(
+        workflow, graph, prefetch=prefetch, fusion=fusion
+    )
     baseline_estimate = _estimate(baseline)
     compiled_estimate = _estimate(compiled)
 
@@ -198,6 +250,8 @@ def compile_workflow(workflow: WorkflowIR) -> CompilePlan:
         baseline_estimate=baseline_estimate,
         compiled_estimate=compiled_estimate,
         latency_reduction_pct=reduction,
-        optimization_candidates=_candidates(workflow, graph, baseline, compiled),
+        optimization_candidates=_candidates(
+            workflow, graph, baseline, compiled, fusion, prefetch, snapshot
+        ),
         warnings=warnings,
     )

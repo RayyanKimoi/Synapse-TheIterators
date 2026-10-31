@@ -41,9 +41,11 @@ logger = logging.getLogger(__name__)
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 KEY_PREFIX = "synapse:sc"
 FALLBACK_DIMS = 256
-# Without an explicit timeout a blackholed Redis port does not refuse the
-# connection, it hangs on the OS default (~21s on Windows) -- long enough to
-# stall the first request of a demo while the cache decides it has no backend.
+# Hard ceiling on any single Redis operation, connect included. Socket timeouts
+# alone are not enough: redis-py retries with backoff underneath them, so a
+# server that disappears mid-run took ~15s to be declared dead -- long enough to
+# freeze a live run. wait_for bounds the whole call, retries and all, whatever
+# the client does internally.
 REDIS_TIMEOUT_S = 1.5
 # A root node has no upstream context. Embedding a constant rather than "" keeps
 # two empty contexts scoring 1.0 against each other instead of 0.0.
@@ -238,13 +240,22 @@ class SemanticCache:
             bucket[digest] = (time.time() + ttl_s, vectors, text)
             return
         try:
-            await client.set(
-                self._key(namespace, digest),
-                json.dumps({"q": vectors[0], "c": vectors[1], "t": text}),
-                ex=ttl_s,
+            await asyncio.wait_for(
+                client.set(
+                    self._key(namespace, digest),
+                    json.dumps({"q": vectors[0], "c": vectors[1], "t": text}),
+                    ex=ttl_s,
+                ),
+                REDIS_TIMEOUT_S,
             )
         except Exception as exc:
             self._degrade(exc)
+            # Keep the entry rather than lose it with the backend.
+            self._memory.setdefault(namespace, {})[digest] = (
+                time.time() + ttl_s,
+                vectors,
+                text,
+            )
 
     async def _embed_pair(self, query: str, context: str) -> Vectors:
         query_vector, context_vector = await embed_many([query, context or EMPTY_CONTEXT])
@@ -255,10 +266,9 @@ class SemanticCache:
         if client is None:
             return self._live_memory_entries(namespace)
         try:
-            # shortcut: SCAN is O(keyspace); fine for demo-sized runs, swap for
-            # a per-namespace index or Redis vector search before real volume.
-            keys = [key async for key in client.scan_iter(match=self._key(namespace, "*"))]
-            raw = await client.mget(keys) if keys else []
+            raw = await asyncio.wait_for(
+                self._redis_read(client, namespace), REDIS_TIMEOUT_S
+            )
         except Exception as exc:
             self._degrade(exc)
             return self._live_memory_entries(namespace)
@@ -273,6 +283,12 @@ class SemanticCache:
             except (ValueError, KeyError, TypeError):
                 continue  # a foreign key landed under our prefix
         return entries
+
+    async def _redis_read(self, client: Any, namespace: str) -> list[str | None]:
+        # shortcut: SCAN is O(keyspace); fine for demo-sized runs, swap for a
+        # per-namespace index or Redis vector search before real volume.
+        keys = [key async for key in client.scan_iter(match=self._key(namespace, "*"))]
+        return await client.mget(keys) if keys else []
 
     def _live_memory_entries(self, namespace: str) -> list[tuple[Vectors, str]]:
         bucket = self._memory.get(namespace)
@@ -301,7 +317,7 @@ class SemanticCache:
                 socket_connect_timeout=REDIS_TIMEOUT_S,
                 socket_timeout=REDIS_TIMEOUT_S,
             )
-            await client.ping()
+            await asyncio.wait_for(client.ping(), REDIS_TIMEOUT_S)
         except Exception as exc:
             logger.info("redis unavailable (%s); semantic cache is in-memory", exc)
             return None
@@ -310,7 +326,12 @@ class SemanticCache:
 
     def _degrade(self, exc: Exception) -> None:
         """Redis dropped mid-run: fall back to memory for the rest of the process."""
-        logger.warning("redis semantic cache failed (%s); falling back to memory", exc)
+        # A bare TimeoutError stringifies to nothing, so name the type too.
+        logger.warning(
+            "redis semantic cache failed (%s: %s); falling back to memory",
+            type(exc).__name__,
+            exc,
+        )
         self._redis = None
 
 
