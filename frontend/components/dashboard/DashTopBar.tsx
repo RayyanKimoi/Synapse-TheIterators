@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { ThemeToggle } from "@/components/ThemeToggle";
+
 import { IconChevron, IconSearch } from "./icons";
 
 /**
@@ -67,7 +69,7 @@ export function DashTopBar() {
   }, []);
 
   return (
-    <header className="flex h-16 shrink-0 items-center gap-4 border-b border-white/10 bg-black/60 px-5 backdrop-blur-xl">
+    <header className="flex h-16 shrink-0 items-center gap-4 border-b border-white/10 bg-void/60 px-5 backdrop-blur-xl">
       <nav aria-label="Breadcrumb" className="hidden shrink-0 items-center gap-2 sm:flex">
         <Link
           href="/dashboard"
@@ -94,6 +96,8 @@ export function DashTopBar() {
           /
         </kbd>
       </div>
+
+      <ThemeToggle className="shrink-0" />
 
       <div ref={menu} className="relative shrink-0">
         <button

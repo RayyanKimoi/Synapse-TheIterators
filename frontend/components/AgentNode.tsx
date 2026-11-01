@@ -15,12 +15,14 @@ export type AgentNodeData = {
   nodeType: WorkflowNodeType;
   telemetry: NodeTelemetry;
   variant: "baseline" | "compiled";
+  /** False until execution reaches this node; drives the fade-in. */
+  revealed: boolean;
 };
 
 export type AgentFlowNode = Node<AgentNodeData, "agent">;
 
 function AgentNodeComponent({ data }: NodeProps<AgentFlowNode>) {
-  const { persona, nodeType, telemetry, variant } = data;
+  const { persona, nodeType, telemetry, variant, revealed } = data;
   const style = STATE_STYLE[telemetry.status];
   const ringRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -83,7 +85,14 @@ function AgentNodeComponent({ data }: NodeProps<AgentFlowNode>) {
   const Icon = nodeType === "llm_agent" ? Bot : Wrench;
 
   return (
-    <div className="relative">
+    <div
+      className="relative transition-[opacity,transform] duration-[550ms] ease-out motion-reduce:transition-none"
+      style={{
+        opacity: revealed ? 1 : 0,
+        transform: revealed ? "none" : "translateY(10px)",
+        pointerEvents: revealed ? undefined : "none",
+      }}
+    >
       {running && (
         <div
           ref={ringRef}

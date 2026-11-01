@@ -17,6 +17,8 @@ import type { NodeStatus } from "@/lib/types";
 export type SynapseEdgeData = {
   upstream: NodeStatus;
   variant: "baseline" | "compiled";
+  /** False until both endpoint nodes have faded in; drives the edge fade. */
+  revealed?: boolean;
 };
 
 export type SynapseEdge = Edge<SynapseEdgeData, "synapse">;
@@ -42,6 +44,7 @@ function CustomEdgeComponent({
 }: EdgeProps<SynapseEdge>) {
   const upstream: NodeStatus = data?.upstream ?? "IDLE";
   const variant = data?.variant ?? "compiled";
+  const revealed = data?.revealed ?? true;
 
   // The baseline lane draws rigid straight runs; the compiled lane curves,
   // which reads as routed rather than queued.
@@ -128,7 +131,8 @@ function CustomEdgeComponent({
         style={{
           stroke,
           strokeWidth: upstream === "IDLE" ? 1.1 : upstream === "CACHED" ? 2.4 : 1.9,
-          opacity: upstream === "IDLE" ? 0.5 : 1,
+          opacity: revealed ? (upstream === "IDLE" ? 0.5 : 1) : 0,
+          transition: "opacity 450ms ease-out",
           filter:
             upstream === "CACHED" || upstream === "RUNNING"
               ? `drop-shadow(0 0 5px ${stroke})`
@@ -139,7 +143,7 @@ function CustomEdgeComponent({
       {/* Invisible twin used purely for getPointAtLength measurements. */}
       <path ref={pathRef} d={path} fill="none" stroke="none" />
 
-      {spec && (
+      {spec && revealed && (
         <g ref={groupRef} aria-hidden>
           {Array.from({ length: spec.count }).map((_, index) => (
             <circle

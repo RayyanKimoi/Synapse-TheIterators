@@ -13,6 +13,7 @@ import {
   Zap,
 } from "lucide-react";
 
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -182,6 +183,8 @@ export function TopNav({
         </button>
 
         <HealthBadge health={health} />
+
+        <ThemeToggle />
 
         <Button
           size="sm"

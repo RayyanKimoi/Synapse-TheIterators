@@ -17,6 +17,10 @@ const config: Config = {
         display: ["var(--font-display)"],
       },
       colors: {
+        // `white` is remapped to a theme-aware ink token so the many
+        // `text-white`/`border-white/..` utilities invert in light mode without
+        // touching each component. On dark, --ink is white, so nothing changes.
+        white: "hsl(var(--ink) / <alpha-value>)",
         void: "hsl(var(--void))",
         stream: "hsl(var(--stream))",
         background: "hsl(var(--background))",

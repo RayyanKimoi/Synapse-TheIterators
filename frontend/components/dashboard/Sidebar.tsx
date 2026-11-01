@@ -62,7 +62,7 @@ export function Sidebar() {
   return (
     <aside
       data-collapsed={collapsed ? "" : undefined}
-      className={`relative z-30 flex shrink-0 flex-col border-r border-white/10 bg-black/60 backdrop-blur-xl transition-[width] duration-300 ease-out ${
+      className={`relative z-30 flex shrink-0 flex-col border-r border-white/10 bg-void/60 backdrop-blur-xl transition-[width] duration-300 ease-out ${
         collapsed ? "w-[68px]" : "w-[232px]"
       }`}
     >

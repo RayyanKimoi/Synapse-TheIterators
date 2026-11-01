@@ -6,12 +6,13 @@ import { AgentMesh } from "@/components/landing/AgentMesh";
 import { AgentPipeline } from "@/components/landing/AgentPipeline";
 import { AgentRack } from "@/components/landing/AgentRack";
 import { ScrollStage } from "@/components/landing/Motion";
-import { HandoffCarousel } from "@/components/landing/HandoffCarousel";
+import { LaptopShowcase } from "@/components/landing/LaptopShowcase";
 import { StepsDeck } from "@/components/landing/StepsDeck";
 import { Telemetry } from "@/components/landing/Telemetry";
 import { ClosingPlasma } from "@/components/ui/closing-plasma";
 import { FlightStatusCard } from "@/components/ui/flight-status-card";
 import { ScrollBasedVelocity } from "@/components/ui/scroll-based-velocity";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const NAV = [
   { href: "#execution", label: "Execution" },
@@ -75,7 +76,7 @@ export default function LandingPage() {
           </div>
         </div>
 
-        <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-black/70 backdrop-blur-xl">
+        <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-void/70 backdrop-blur-xl">
           <nav className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 pl-12 sm:gap-6 sm:px-6 sm:pl-20 lg:pl-28">
             <Link href="/" className="flex items-center gap-2.5">
               <Logo />
@@ -94,6 +95,7 @@ export default function LandingPage() {
                   {item.label}
                 </a>
               ))}
+              <ThemeToggle className="ml-1" />
               <Link
                 href="/dashboard"
                 className="ml-2 inline-flex items-center gap-1.5 rounded-lg bg-stream px-3 py-2 font-head text-[13px] font-semibold text-black transition-opacity hover:opacity-90 sm:px-3.5"
@@ -130,7 +132,7 @@ export default function LandingPage() {
             <div className="mt-8 grid gap-4 lg:grid-cols-2">
               <div
                 data-settle
-                className="settle glass relative overflow-hidden rounded-2xl border border-white/[0.07] bg-black/40 p-4"
+                className="settle glass relative overflow-hidden rounded-2xl border border-white/[0.07] bg-void/40 p-4"
                 style={{ "--settle-at": "90ms" } as React.CSSProperties}
               >
                 <div className="flex items-baseline justify-between font-sans text-[10px] uppercase tracking-[0.2em] text-white/55">
@@ -144,7 +146,7 @@ export default function LandingPage() {
 
               <div
                 data-settle
-                className="settle glass glass-lime relative overflow-hidden rounded-2xl border border-white/[0.07] bg-black/40 p-4"
+                className="settle glass glass-lime relative overflow-hidden rounded-2xl border border-white/[0.07] bg-void/40 p-4"
                 style={{ "--settle-at": "170ms" } as React.CSSProperties}
               >
                 <div className="flex items-baseline justify-between font-sans text-[10px] uppercase tracking-[0.2em] text-white/55">
@@ -166,6 +168,21 @@ export default function LandingPage() {
         >
           <ScrollBasedVelocity text="Parallel execution · Semantic caching · Speculative prefetch · Prompt fusion · " />
         </div>
+
+        {/* ------------------------------------------------- product demo -- */}
+        <section className="relative z-40 border-t border-white/[0.06] bg-void py-20">
+          <div className="mx-auto w-full max-w-7xl px-4 pl-12 sm:px-6 sm:pl-20 lg:pl-28">
+            <div data-settle className="settle mx-auto max-w-3xl pb-10 text-center">
+              <p className="font-sans text-[11px] uppercase tracking-[0.3em] text-white/50">
+                See it run
+              </p>
+              <h2 className="mt-4 font-head text-[clamp(1.8rem,4vw,3rem)] font-extrabold leading-[1.04] tracking-[-0.028em]">
+                The arena, in motion.
+              </h2>
+            </div>
+            <LaptopShowcase />
+          </div>
+        </section>
 
         {/* ----------------------------------------------------- execution -- */}
         <section
@@ -220,27 +237,6 @@ export default function LandingPage() {
             <div className="mt-10">
               <StepsDeck />
             </div>
-          </div>
-        </section>
-
-        {/* --------------------------------------------- workflow handoffs -- */}
-        <section className="relative z-40 border-t border-white/10 bg-void py-20">
-          <div className="mx-auto w-full max-w-7xl px-4 pl-12 sm:px-6 sm:pl-20 lg:pl-28">
-            <div data-settle className="settle max-w-3xl pb-10">
-              <p className="font-sans text-[11px] uppercase tracking-[0.3em] text-white/50">
-                The handoffs
-              </p>
-              <h2 className="mt-4 font-head text-[clamp(1.8rem,4vw,3rem)] font-extrabold leading-[1.04] tracking-[-0.028em]">
-                Six steps, one compile.
-              </h2>
-              <p className="mt-4 font-sans text-[15px] leading-relaxed text-white/60">
-                Every stage between an imperative script and a dependency-aware execution tree.
-                Drag to move through them.
-              </p>
-            </div>
-          </div>
-          <div data-settle className="settle">
-            <HandoffCarousel />
           </div>
         </section>
 

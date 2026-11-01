@@ -4,12 +4,53 @@
 @tailwind components;
 @tailwind utilities;
 
-/* SYNAPSE is a dark-only surface, so the tokens live on :root and `.dark` is
-   kept on <html> purely so shadcn's `dark:` variants resolve too.
-   Values are HSL triplets (not hex/oklch) so Tailwind's `/opacity` modifiers
-   keep working inside the shadcn primitives. */
+/* Two themes off one token set. Values are HSL triplets (not hex/oklch) so
+   Tailwind's `/opacity` modifiers keep working inside the shadcn primitives.
+   `:root` is light (the default when no class is set); `.dark` overrides with
+   the original Neon Void palette. `--ink` is the key to theming the custom
+   glass surfaces: it is white on dark and near-black on light, and Tailwind's
+   `white` color is remapped to it, so `text-white/..` inverts for free.
+   The shared accent (lime), radius and fonts are theme-independent. */
 @layer base {
   :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 10%;
+
+    --primary: 83 78% 55%; /* #A3E635 lime — the one accent, both themes */
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 94%;
+    --secondary-foreground: 0 0% 10%;
+    --muted: 0 0% 94%;
+    --muted-foreground: 0 0% 38%;
+    --accent: 83 78% 55%;
+    --accent-foreground: 0 0% 0%;
+    --destructive: 0 75% 48%; /* crimson, darkened for white-bg contrast */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 0 0% 86%;
+    --input: 0 0% 90%;
+    --ring: 83 60% 40%;
+    --radius: 0.75rem;
+
+    --ink: 0 0% 12%; /* primary ink; `white` resolves to this */
+    --void: 0 0% 96%;
+    --surface: 0 0% 100%;
+
+    /* Node state vocabulary (PRD 8.1), darkened so it carries on a light bg. */
+    --state-idle: 0 0% 55%;
+    --state-running: 83 60% 40%;
+    --state-cached: 142 60% 36%;
+    --state-completed: 96 40% 34%;
+    --state-failed: 0 72% 48%;
+    --state-blocking: 0 0% 48%;
+  }
+
+  .dark {
     --background: 0 0% 0%; /* pitch black — same base as the landing page */
     --foreground: 0 0% 98%;
 
@@ -18,7 +59,7 @@
     --popover: 0 0% 4%;
     --popover-foreground: 0 0% 98%;
 
-    --primary: 83 78% 55%; /* #A3E635 lime — the one accent */
+    --primary: 83 78% 55%;
     --primary-foreground: 0 0% 0%;
     --secondary: 0 0% 11%;
     --secondary-foreground: 0 0% 98%;
@@ -32,12 +73,11 @@
     --border: 0 0% 14%;
     --input: 0 0% 11%;
     --ring: 83 78% 55%;
-    --radius: 0.75rem;
 
-    /* Node state vocabulary (PRD 8.1), expressed in the Neon Void palette:
-       the compiled lane lives on the lime ramp, the unoptimised baseline on
-       neutral grey, and failure keeps crimson so colour is never the only
-       difference between "slow" and "broken". */
+    --ink: 0 0% 100%;
+    --void: 0 0% 0%;
+    --surface: 0 0% 2%;
+
     --state-idle: 0 0% 30%;
     --state-running: 83 78% 55%; /* #A3E635 lime — live */
     --state-cached: 142 72% 45%; /* #22C55E emerald — served from cache */
@@ -100,7 +140,7 @@
     );
     backdrop-filter: blur(12px);
     box-shadow:
-      inset 0 1px 0 hsl(0 0% 100% / 0.06),
+      inset 0 1px 0 hsl(var(--ink) /0.06),
       0 10px 30px -12px hsl(0 0% 0% / 0.9);
   }
 
@@ -132,9 +172,9 @@
   /* Elevated panel: hairline top highlight + deep drop, the thing that
      separates "premium dark" from "grey box". */
   .surface {
-    background-color: hsl(0 0% 100% / 0.025);
+    background-color: hsl(var(--ink) /0.025);
     box-shadow:
-      inset 0 1px 0 hsl(0 0% 100% / 0.045),
+      inset 0 1px 0 hsl(var(--ink) /0.045),
       0 18px 40px -24px hsl(0 0% 0% / 0.95);
   }
 
@@ -257,9 +297,8 @@
 
 @layer base {
   :root {
-    --void: 0 0% 0%;          /* pitch black base */
-    --surface: 0 0% 2%;       /* #050505 raised surface */
-    --stream: 83 78% 55%; /* #A3E635 lime */
+    /* --void and --surface are theme-aware (set in the blocks above). */
+    --stream: 83 78% 55%; /* #A3E635 lime — brand accent, both themes */
     --stream-hot: 78 95% 80%;
     /* Inter: UI, metadata and body copy. Montserrat: section headers and nav.
        Playfair Display: editorial impact quotes. Sturdy/Impact: hero metrics. */
@@ -305,13 +344,13 @@
   .glass {
     background: linear-gradient(
       160deg,
-      hsl(0 0% 100% / 0.055) 0%,
-      hsl(0 0% 100% / 0.02) 42%,
-      hsl(0 0% 100% / 0.045) 100%
+      hsl(var(--ink) /0.055) 0%,
+      hsl(var(--ink) /0.02) 42%,
+      hsl(var(--ink) /0.045) 100%
     );
     backdrop-filter: blur(18px);
     box-shadow:
-      inset 0 1px 0 hsl(0 0% 100% / 0.08),
+      inset 0 1px 0 hsl(var(--ink) /0.08),
       0 30px 70px -40px hsl(0 0% 0% / 1);
   }
 
@@ -378,8 +417,8 @@
     background-image: linear-gradient(
       to right,
       transparent,
-      hsl(0 0% 100% / 0.12) 18%,
-      hsl(0 0% 100% / 0.12) 82%,
+      hsl(var(--ink) /0.12) 18%,
+      hsl(var(--ink) /0.12) 82%,
       transparent
     );
   }
@@ -467,12 +506,12 @@
     position: relative;
     background-image: linear-gradient(
       160deg,
-      hsl(0 0% 100% / 0.10) 0%,
-      hsl(0 0% 100% / 0.035) 46%,
-      hsl(0 0% 100% / 0.06) 100%
+      hsl(var(--ink) /0.10) 0%,
+      hsl(var(--ink) /0.035) 46%,
+      hsl(var(--ink) /0.06) 100%
     );
     backdrop-filter: blur(18px);
-    border: 1px solid hsl(0 0% 100% / 0.1);
+    border: 1px solid hsl(var(--ink) /0.1);
     transition:
       border-color 240ms ease,
       box-shadow 240ms ease;
@@ -490,15 +529,15 @@
     background-image: linear-gradient(
       to right,
       transparent,
-      hsl(0 0% 100% / 0.1) 12%,
-      hsl(0 0% 100% / 0.1) 88%,
+      hsl(var(--ink) /0.1) 12%,
+      hsl(var(--ink) /0.1) 88%,
       transparent
     );
   }
 
   .void-input {
-    background: hsl(0 0% 100% / 0.04);
-    border: 1px solid hsl(0 0% 100% / 0.1);
+    background: hsl(var(--ink) /0.04);
+    border: 1px solid hsl(var(--ink) /0.1);
     transition:
       border-color 200ms ease,
       box-shadow 200ms ease;

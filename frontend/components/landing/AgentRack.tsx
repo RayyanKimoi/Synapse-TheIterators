@@ -178,7 +178,7 @@ export function AgentRack() {
   }, []);
 
   return (
-    <div className="iso rack glass glass-lime relative overflow-hidden rounded-2xl border border-white/[0.06] bg-black/40 p-4 sm:p-5">
+    <div className="iso rack glass glass-lime relative overflow-hidden rounded-2xl border border-white/[0.06] bg-void/40 p-4 sm:p-5">
       <div className="flex items-baseline justify-between font-sans text-[10px] uppercase tracking-[0.22em] text-white/55">
         <span>Fig 1 · Execution engine</span>
         <span className="stream-text">Live</span>
@@ -202,7 +202,7 @@ export function AgentRack() {
           { label: "Critical path", ref: pathOut, value: ms(M.path.warm), lime: false },
           { label: "Off baseline", ref: savedOut, value: "57.9%", lime: true },
         ].map((cell) => (
-          <div key={cell.label} className="bg-black/70 px-3 py-2">
+          <div key={cell.label} className="bg-void/70 px-3 py-2">
             <dt className="text-[9.5px] uppercase tracking-[0.18em] text-white/55">{cell.label}</dt>
             <dd
               className={`tabular mt-1 text-[15px] leading-none ${cell.lime ? "stream-text" : "text-white/85"}`}
