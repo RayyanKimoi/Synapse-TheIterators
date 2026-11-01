@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     judge_model: str = "gemini-3.5-flash"
     judge_timeout_s: float = Field(default=60.0, gt=0)
 
+    # Slack alerts for halted runs (app/alerts.py). Empty webhook = feature off;
+    # the URL is a secret and never reaches the frontend, only the deep link is.
+    slack_webhook_url: str = ""
+    dashboard_base_url: str = "http://localhost:3000"
+
     llm_offline_mode: bool = False
     telemetry_tick_ms: int = 100
     workflows_dir: Path = REPO_ROOT / "workflows"

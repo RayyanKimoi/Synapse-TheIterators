@@ -23,6 +23,7 @@ from typing import get_args
 
 import networkx as nx
 
+from .. import alerts
 from ..compiler.dag import assert_acyclic, baseline_sequence, build_graph
 from ..compiler.planner import (
     graph_without_rejected_parallelism,
@@ -329,6 +330,22 @@ async def stream_telemetry(
     )
     final = frame(total_ms, contract)
     yield {"event": "telemetry_update", "data": final.model_dump_json()}
+
+    # Slack, best-effort and fire-and-forget. Once per halted run, not once per
+    # node: a halt has a single root cause and the nodes downstream of it only
+    # echo that. Posted after the failure is on the stream, so the dashboard is
+    # already truthful by the time anyone follows the link.
+    failed = next((node for node, timing in done.items() if timing.failed), None)
+    if failed is not None or budget.tripped:
+        error = executor.outcomes[failed].error if failed is not None else None
+        alerts.notify(
+            run_id=run_id,
+            failed_node=failed or "n/a",
+            reason=error or ("Budget exceeded" if budget.tripped else "Unhandled failure"),
+            spent_usd=budget.spent_usd,
+            budget_usd=budget.limit_usd if math.isfinite(budget.limit_usd) else 0.0,
+            breaker=budget.tripped,
+        )
 
     # History for the next run: the declared DAG, not the chain the baseline
     # executed over.
