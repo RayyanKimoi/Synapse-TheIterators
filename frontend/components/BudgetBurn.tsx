@@ -15,6 +15,7 @@ import {
   levelsToAnnounce,
   usagePct,
 } from "@/lib/budget";
+import { smoothLinePath } from "@/lib/curve";
 import type { PipelineType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useTelemetryStore } from "@/store/useTelemetryStore";
@@ -109,9 +110,9 @@ export function BudgetBurn({ declaredBudget }: { declaredBudget: number }) {
           {lanes.map((lane) =>
             lane.samples.length ? (
               <g key={lane.pipeline}>
-                <path d={stepPath(lane.samples, x, y, budget, true)} fill={lane.stroke} fillOpacity={0.12} />
+                <path d={spendPath(lane.samples, x, y, budget, true)} fill={lane.stroke} fillOpacity={0.12} />
                 <path
-                  d={stepPath(lane.samples, x, y, budget, false)}
+                  d={spendPath(lane.samples, x, y, budget, false)}
                   fill="none"
                   stroke={lane.stroke}
                   strokeWidth={1.5}
@@ -142,21 +143,25 @@ function Threshold({ y, tone }: { y: number; tone: string }) {
   );
 }
 
-/** Spend is booked when a node completes, so the honest shape is a step, not a slope. */
-function stepPath(
+/** Spend is booked per node, so the samples step; a monotone spline curves
+ *  those steps without ever dipping below a percentage already reached. */
+function spendPath(
   samples: BudgetSample[],
   x: (t: number) => number,
   y: (pct: number) => number,
   budget: number,
   area: boolean,
 ): string {
-  let d = `M0 ${y(0)}`;
-  for (const sample of samples) {
-    d += ` H${x(sample.t).toFixed(1)} V${y(usagePct(sample.costUsd, budget)).toFixed(1)}`;
-  }
-  if (!area) return d;
+  const points: [number, number][] = [
+    [0, y(0)],
+    ...samples.map(
+      (sample) => [x(sample.t), y(usagePct(sample.costUsd, budget))] as [number, number],
+    ),
+  ];
+  const line = smoothLinePath(points);
+  if (!line || !area) return line;
   const end = x(samples[samples.length - 1].t).toFixed(1);
-  return `${d} L${end} ${H} L0 ${H} Z`;
+  return `${line} L${end},${H} L0,${H} Z`;
 }
 
 /** One alert per level per run, announced the first frame it is reached. */

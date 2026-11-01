@@ -4,6 +4,7 @@ import { useMemo } from "react";
 
 import { BudgetBurn } from "@/components/BudgetBurn";
 import type { BudgetSample } from "@/lib/budget";
+import { smoothLinePath } from "@/lib/curve";
 import type { WorkflowIR } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { nodeTelemetry, useTelemetryStore } from "@/store/useTelemetryStore";
@@ -34,9 +35,7 @@ function path(
   yScale: (value: number) => number,
 ) {
   if (points.length < 2) return "";
-  return points
-    .map(([x, y], index) => `${index ? "L" : "M"}${xScale(x).toFixed(1)},${yScale(y).toFixed(1)}`)
-    .join(" ");
+  return smoothLinePath(points.map(([x, y]) => [xScale(x), yScale(y)]));
 }
 
 function LineChart({
