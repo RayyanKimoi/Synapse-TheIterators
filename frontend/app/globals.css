@@ -10,37 +10,40 @@
    keep working inside the shadcn primitives. */
 @layer base {
   :root {
-    --background: 225 20% 4%; /* #08090C deep slate */
-    --foreground: 210 20% 98%;
+    --background: 0 0% 0%; /* pitch black — same base as the landing page */
+    --foreground: 0 0% 98%;
 
-    --card: 225 18% 9%; /* #12141A card surface */
-    --card-foreground: 210 20% 98%;
-    --popover: 225 18% 9%;
-    --popover-foreground: 210 20% 98%;
+    --card: 0 0% 4%; /* near-black card surface */
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 4%;
+    --popover-foreground: 0 0% 98%;
 
-    --primary: 189 94% 43%; /* #06B6D4 electric cyan */
-    --primary-foreground: 225 20% 4%;
-    --secondary: 240 4% 16%;
-    --secondary-foreground: 210 20% 98%;
-    --muted: 240 4% 16%;
-    --muted-foreground: 240 5% 68%;
-    --accent: 258 90% 66%; /* #8B5CF6 electric violet */
-    --accent-foreground: 210 20% 98%;
+    --primary: 83 78% 55%; /* #A3E635 lime — the one accent */
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 11%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 11%;
+    --muted-foreground: 0 0% 62%;
+    --accent: 83 78% 55%;
+    --accent-foreground: 0 0% 0%;
     --destructive: 0 84% 60%; /* #EF4444 crimson */
-    --destructive-foreground: 210 20% 98%;
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 240 5% 15%;
-    --input: 240 4% 16%;
-    --ring: 189 94% 43%;
+    --border: 0 0% 14%;
+    --input: 0 0% 11%;
+    --ring: 83 78% 55%;
     --radius: 0.75rem;
 
-    /* Node state vocabulary (PRD 8.1) */
-    --state-idle: 240 5% 30%; /* #3F3F46 */
-    --state-running: 189 94% 43%; /* #06B6D4 electric cyan */
-    --state-cached: 160 84% 39%; /* #10B981 neon emerald */
-    --state-completed: 258 90% 66%; /* #8B5CF6 deep violet */
+    /* Node state vocabulary (PRD 8.1), expressed in the Neon Void palette:
+       the compiled lane lives on the lime ramp, the unoptimised baseline on
+       neutral grey, and failure keeps crimson so colour is never the only
+       difference between "slow" and "broken". */
+    --state-idle: 0 0% 30%;
+    --state-running: 83 78% 55%; /* #A3E635 lime — live */
+    --state-cached: 142 72% 45%; /* #22C55E emerald — served from cache */
+    --state-completed: 96 45% 42%; /* deep moss — settled */
     --state-failed: 0 84% 60%; /* #EF4444 crimson */
-    --state-blocking: 25 95% 53%; /* #F97316 baseline blocking orange */
+    --state-blocking: 0 0% 64%; /* neutral grey — the unoptimised lane */
   }
 }
 
@@ -54,8 +57,8 @@
     /* A cool spill from the arena plus a vignette, so the canvas reads as lit
        rather than as a flat #08090C rectangle. */
     background-image:
-      radial-gradient(900px 420px at 50% -8%, hsl(189 94% 43% / 0.07), transparent 70%),
-      radial-gradient(700px 400px at 12% 108%, hsl(258 90% 66% / 0.06), transparent 72%);
+      radial-gradient(900px 420px at 50% -8%, hsl(83 78% 55% / 0.06), transparent 70%),
+      radial-gradient(700px 400px at 12% 108%, hsl(83 78% 55% / 0.04), transparent 72%);
     background-attachment: fixed;
   }
 
@@ -74,11 +77,11 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: hsl(240 5% 20%);
+    background: hsl(0 0% 18%);
     border-radius: 99px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: hsl(240 5% 28%);
+    background: hsl(83 30% 32%);
   }
 }
 
@@ -89,16 +92,16 @@
     position: relative;
     background-image: linear-gradient(
       120deg,
-      hsl(225 18% 11% / 0.95) 0%,
-      hsl(225 16% 16% / 0.92) 22%,
-      hsl(200 30% 24% / 0.78) 44%,
-      hsl(225 16% 14% / 0.92) 68%,
-      hsl(225 18% 10% / 0.95) 100%
+      hsl(0 0% 5% / 0.95) 0%,
+      hsl(0 0% 9% / 0.92) 22%,
+      hsl(83 24% 14% / 0.82) 44%,
+      hsl(0 0% 8% / 0.92) 68%,
+      hsl(0 0% 4% / 0.95) 100%
     );
     backdrop-filter: blur(12px);
     box-shadow:
       inset 0 1px 0 hsl(0 0% 100% / 0.06),
-      0 10px 30px -12px hsl(225 40% 2% / 0.9);
+      0 10px 30px -12px hsl(0 0% 0% / 0.9);
   }
 
   /* Slow chrome sheen travelling across command bars. */
@@ -111,7 +114,7 @@
     background: linear-gradient(
       100deg,
       transparent 35%,
-      hsl(195 100% 85% / 0.07) 48%,
+      hsl(83 90% 80% / 0.08) 48%,
       transparent 62%
     );
     background-size: 300% 100%;
@@ -121,18 +124,18 @@
   /* Faint pixel grid behind the execution arena. */
   .pixel-canvas {
     background-image:
-      linear-gradient(to right, hsl(240 4% 16% / 0.45) 1px, transparent 1px),
-      linear-gradient(to bottom, hsl(240 4% 16% / 0.45) 1px, transparent 1px);
+      linear-gradient(to right, hsl(83 40% 50% / 0.07) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(83 40% 50% / 0.07) 1px, transparent 1px);
     background-size: 28px 28px;
   }
 
   /* Elevated panel: hairline top highlight + deep drop, the thing that
      separates "premium dark" from "grey box". */
   .surface {
-    background-color: hsl(var(--card) / 0.55);
+    background-color: hsl(0 0% 100% / 0.025);
     box-shadow:
       inset 0 1px 0 hsl(0 0% 100% / 0.045),
-      0 18px 40px -24px hsl(225 60% 2% / 0.95);
+      0 18px 40px -24px hsl(0 0% 0% / 0.95);
   }
 
   .grain::before {

@@ -27,8 +27,8 @@ export function RaceArena({ workflow, plan }: RaceArenaProps) {
         title="Unoptimized Baseline"
         subtitle="Sequential imperative chain · one node at a time"
         run={runs.baseline}
-        accent="text-state-blocking"
-        rail="from-state-blocking/70"
+        accent="text-white/70"
+        rail="from-white/30"
       >
         <FlowCanvas
           workflow={workflow}
@@ -47,8 +47,8 @@ export function RaceArena({ workflow, plan }: RaceArenaProps) {
             : "Ready-Node scheduler · dependency-aware dispatch"
         }
         run={runs.compiled}
-        accent="text-state-running"
-        rail="from-state-running/70"
+        accent="text-stream"
+        rail="from-stream/80"
       >
         <FlowCanvas
           workflow={workflow}
@@ -81,24 +81,24 @@ function Lane({
   const clockRef = useCountUp(elapsed, formatStopwatch, 0.12);
 
   return (
-    <section className="surface grain relative flex min-h-0 flex-col overflow-hidden rounded-2xl border border-white/[0.07]">
+    <section className="void-card relative flex min-h-0 flex-col overflow-hidden rounded-2xl">
       {/* Lane identity rail along the top edge. */}
       <div
         aria-hidden
         className={cn("h-[2px] w-full bg-gradient-to-r to-transparent", rail)}
       />
 
-      <header className="relative flex items-center gap-3 border-b border-white/[0.07] px-4 py-2.5">
+      <header className="relative flex items-center gap-3 border-b border-white/[0.08] bg-white/[0.02] px-4 py-2.5">
         <div className="min-w-0">
-          <h2 className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground">
+          <h2 className="truncate font-head text-[11.5px] font-semibold uppercase tracking-[0.16em] text-white">
             {title}
           </h2>
-          <p className="truncate text-[10.5px] text-muted-foreground">{subtitle}</p>
+          <p className="truncate font-sans text-[10.5px] text-white/45">{subtitle}</p>
         </div>
 
         <div className="ml-auto flex items-center gap-2.5">
           <RunBadge run={run} />
-          <span ref={clockRef} className={cn("ticker text-[22px] font-semibold", accent)}>
+          <span ref={clockRef} className={cn("ticker text-[24px] font-semibold", accent)}>
             00:00.000
           </span>
         </div>
@@ -111,8 +111,8 @@ function Lane({
 
 function RunBadge({ run }: { run: RunState }) {
   const map = {
-    streaming: { label: "LIVE", tone: "border-state-running/60 text-state-running", pulse: true },
-    done: { label: "DONE", tone: "border-state-completed/60 text-state-completed", pulse: false },
+    streaming: { label: "LIVE", tone: "border-stream/60 text-stream", pulse: true },
+    done: { label: "DONE", tone: "border-stream/50 text-stream/80", pulse: false },
     error: { label: "ERROR", tone: "border-state-failed/60 text-state-failed", pulse: false },
     idle: { label: "IDLE", tone: "border-white/10 text-muted-foreground", pulse: false },
   } as const;

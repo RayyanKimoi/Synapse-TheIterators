@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Maximize2, Minimize2, PanelsTopLeft } from "lucide-react";
 
 import { AgentRoster } from "@/components/AgentRoster";
-import { TelemetryMeters } from "@/components/dashboard/TelemetryMeters";
 import { AgentTerminal } from "@/components/AgentTerminal";
+import { AnalyticsCharts } from "@/components/dashboard/AnalyticsCharts";
+import { TelemetryMeters } from "@/components/dashboard/TelemetryMeters";
 import { MatchmakerDeck } from "@/components/MatchmakerDeck";
 import { RaceArena } from "@/components/RaceArena";
 import { Scoreboard } from "@/components/Scoreboard";
@@ -16,6 +18,7 @@ import type {
   OptimizationCandidate,
   WorkflowSummary,
 } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { useTelemetryStore } from "@/store/useTelemetryStore";
 
 export default function DashboardPage() {
@@ -109,8 +112,22 @@ export default function DashboardPage() {
     [start, startRace, runOptions],
   );
 
+  // Full screen is state rather than the Fullscreen API: the arena has to stay
+  // inside React so the matchmaker deck and the scoreboard come with it, and a
+  // state flag survives the browser refusing a fullscreen request.
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [expanded]);
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
+    <div className="flex min-h-full flex-col gap-3 p-4">
       <TopNav
         workflows={workflows}
         selectedId={selectedId}
@@ -126,8 +143,6 @@ export default function DashboardPage() {
         onOpenTerminal={() => setTerminalOpen(true)}
       />
 
-      <TelemetryMeters workflow={workflow} plan={plan} />
-
       {loadError && (
         <div className="rounded-xl border border-state-failed/60 bg-state-failed/10 px-4 py-2 text-xs text-state-failed">
           Cannot reach the SYNAPSE backend ({loadError}). Start it with{" "}
@@ -138,21 +153,67 @@ export default function DashboardPage() {
 
       {workflow ? (
         <>
-          <div className="relative flex min-h-0 flex-1 gap-3">
-            <AgentRoster workflow={workflow} plan={plan} />
-            <RaceArena workflow={workflow} plan={plan} />
+          {/* The arena is the page. Expanded, it takes the whole viewport —
+              including the rail and the top bar — and keeps its own scoreboard. */}
+          <section
+            aria-label="Execution arena"
+            className={cn(
+              "flex flex-col gap-3",
+              expanded
+                ? "fixed inset-0 z-50 bg-void/95 p-4 backdrop-blur-xl"
+                : "h-[min(74vh,820px)] min-h-[520px]",
+            )}
+          >
+            <div className="relative flex min-h-0 flex-1 gap-3">
+              <AgentRoster workflow={workflow} plan={plan} />
+              <RaceArena workflow={workflow} plan={plan} />
 
-            {/* Floating matchmaker deck over the arena's right edge. */}
-            <div className="pointer-events-none absolute bottom-3 right-3 z-20">
-              <MatchmakerDeck
-                candidates={plan?.optimization_candidates ?? []}
-                onApprove={onApprove}
-                onReject={onReject}
-                busy={busy}
-              />
+              {/* Wrapped, because an absolutely-positioned flex child gets
+                  stretched by the row's alignment — the wrapper takes the
+                  position and the button stays a 28px square. */}
+              <div className="absolute right-2.5 top-2.5 z-30">
+                <button
+                  type="button"
+                  onClick={() => setExpanded((value) => !value)}
+                  aria-pressed={expanded}
+                  aria-label={expanded ? "Exit full screen" : "Expand the arena to full screen"}
+                  title={expanded ? "Exit full screen (Esc)" : "Full screen"}
+                  className="void-card void-card-hover grid h-7 w-7 place-items-center rounded-lg text-white/60 transition-colors hover:text-white"
+                >
+                  {expanded ? (
+                    <Minimize2 className="h-3.5 w-3.5" />
+                  ) : (
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+
+              {/* Floating matchmaker deck over the arena's right edge. */}
+              <div className="pointer-events-none absolute bottom-3 right-3 z-20">
+                <MatchmakerDeck
+                  candidates={plan?.optimization_candidates ?? []}
+                  onApprove={onApprove}
+                  onReject={onReject}
+                  busy={busy}
+                />
+              </div>
             </div>
+
+            <Scoreboard workflow={workflow} plan={plan} />
+          </section>
+
+          {/* Analytics sit beneath the arena rather than above it, so the
+              graph is what you land on and the numbers are what you scroll to. */}
+          <div className="flex items-center gap-2.5 pt-3">
+            <PanelsTopLeft className="h-3.5 w-3.5 text-stream" />
+            <h2 className="font-head text-[12px] font-semibold uppercase tracking-[0.18em] text-white/70">
+              Run analytics
+            </h2>
+            <span className="h-px flex-1 void-rule" />
           </div>
-          <Scoreboard workflow={workflow} plan={plan} />
+
+          <TelemetryMeters workflow={workflow} plan={plan} />
+          <AnalyticsCharts workflow={workflow} />
         </>
       ) : (
         !loadError && (

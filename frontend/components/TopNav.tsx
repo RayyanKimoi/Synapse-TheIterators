@@ -88,10 +88,10 @@ export function TopNav({
 
       {plan && (
         <div className="relative flex items-center gap-1.5">
-          <span className="rounded-full border border-state-running/40 bg-state-running/10 px-2 py-1 text-[9.5px] font-semibold uppercase tracking-wider text-state-running">
+          <span className="rounded-full border border-stream/35 bg-stream/[0.08] px-2 py-1 font-sans text-[9.5px] font-semibold uppercase tracking-wider text-stream">
             Ready-Node · {plan.node_count} nodes
           </span>
-          <span className="tabular rounded-full border border-state-cached/40 bg-state-cached/10 px-2 py-1 text-[9.5px] font-semibold text-state-cached">
+          <span className="tabular rounded-full border border-white/15 bg-white/[0.04] px-2 py-1 font-sans text-[9.5px] font-semibold text-white/70">
             −{plan.latency_reduction_pct}% projected
           </span>
         </div>
@@ -105,7 +105,7 @@ export function TopNav({
           className={cn(
             "flex min-h-[36px] items-center gap-1.5 rounded-xl border px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors",
             cacheWarm
-              ? "border-state-cached/60 bg-state-cached/15 text-state-cached shadow-[0_0_20px_-8px_hsl(var(--state-cached)/0.9)]"
+              ? "border-stream/60 bg-stream/15 text-stream shadow-[0_0_20px_-8px_hsl(var(--stream)/0.9)]"
               : "border-white/[0.09] text-muted-foreground hover:text-foreground",
           )}
         >
@@ -153,7 +153,7 @@ export function TopNav({
             aria-keyshortcuts="`"
             title="Agent terminal (`)"
           >
-            <Terminal className="mr-1 h-3 w-3" />
+            <Terminal className="mr-1 h-3 w-3 text-stream" />
             Terminal
           </Button>
         )}

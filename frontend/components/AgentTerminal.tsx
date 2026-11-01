@@ -31,11 +31,11 @@ const TONE: Record<Line["tone"], string> = {
   cmd: "text-foreground",
   text: "text-foreground/85",
   muted: "text-muted-foreground",
-  info: "text-state-running",
+  info: "text-stream",
   ok: "text-state-cached",
-  warn: "text-state-blocking",
+  warn: "text-amber-400",
   error: "text-state-failed",
-  accent: "text-state-completed",
+  accent: "text-stream/80",
 };
 
 type AgentTerminalProps = {
@@ -278,19 +278,19 @@ export function AgentTerminal({
   return (
     <section
       aria-label="Agent terminal"
-      className="fixed inset-x-3 bottom-3 z-40 flex h-[min(48vh,480px)] flex-col overflow-hidden rounded-2xl border border-white/[0.1] bg-background/95 shadow-[0_-24px_70px_-30px_hsl(var(--state-running)/0.45)] backdrop-blur-xl"
+      className="void-card fixed inset-x-3 bottom-3 z-40 flex h-[min(48vh,480px)] flex-col overflow-hidden rounded-2xl shadow-[0_-24px_70px_-30px_hsl(var(--stream)/0.45)]"
     >
-      <header className="flex items-center gap-3 border-b border-white/[0.07] liquid-chrome px-4 py-2">
-        <Terminal className="h-3.5 w-3.5 text-state-running" aria-hidden="true" />
-        <span className="font-mono text-[11px] text-foreground">agent@synapse</span>
-        <span className="truncate rounded-md border border-white/[0.08] bg-background/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+      <header className="flex items-center gap-3 border-b border-white/[0.08] bg-white/[0.03] px-4 py-2.5">
+        <Terminal className="h-3.5 w-3.5 text-stream" aria-hidden="true" />
+        <span className="font-mono text-[11px] text-white">agent@synapse</span>
+        <span className="truncate rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10px] text-white/55">
           {workflowId ?? "no workflow"}
         </span>
         <span className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
           <span
             className={cn(
               "h-1.5 w-1.5 rounded-full",
-              running ? "animate-pulse bg-state-running" : "bg-state-cached",
+              running ? "animate-pulse bg-stream" : "bg-stream/50",
             )}
             aria-hidden="true"
           />
@@ -334,7 +334,7 @@ export function AgentTerminal({
           <div key={line.id} className={cn("whitespace-pre-wrap break-words", TONE[line.tone])}>
             {line.tone === "cmd" ? (
               <>
-                <span className="select-none text-state-running">synapse ❯ </span>
+                <span className="select-none text-stream">synapse ❯ </span>
                 {line.text}
               </>
             ) : (
@@ -349,9 +349,9 @@ export function AgentTerminal({
           event.preventDefault();
           void submit(input);
         }}
-        className="flex items-center gap-2 border-t border-white/[0.07] bg-card/40 px-4 py-2.5 font-mono text-[12.5px] focus-within:bg-card/70"
+        className="flex items-center gap-2 border-t border-white/[0.08] bg-white/[0.03] px-4 py-2.5 font-mono text-[12.5px] transition-colors focus-within:bg-white/[0.06]"
       >
-        <span className="select-none text-state-running">synapse ❯</span>
+        <span className="select-none text-stream">synapse ❯</span>
         <input
           ref={inputRef}
           value={input}
@@ -365,7 +365,7 @@ export function AgentTerminal({
           autoCapitalize="off"
           aria-label="Agent terminal input"
           placeholder={running ? "running… Ctrl+C to stop" : "compile and race the market workflow"}
-          className="min-w-0 flex-1 bg-transparent text-foreground caret-state-running outline-none placeholder:text-muted-foreground/45"
+          className="min-w-0 flex-1 bg-transparent text-foreground caret-stream outline-none placeholder:text-muted-foreground/45"
         />
         <CornerDownLeft className="h-3.5 w-3.5 text-muted-foreground/60" aria-hidden="true" />
       </form>

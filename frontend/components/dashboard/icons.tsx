@@ -130,3 +130,19 @@ export const IconCopy = (props: IconProps) => (
     <path d="M15 5.5A1.5 1.5 0 0 0 13.5 4H5.5A1.5 1.5 0 0 0 4 5.5v8A1.5 1.5 0 0 0 5.5 15" />
   </Glyph>
 );
+
+export const IconTerminal = (props: IconProps) => (
+  <Glyph {...props}>
+    <rect x="3" y="4" width="18" height="16" rx="2.5" />
+    <path d="M7.5 9.5 10.5 12l-3 2.5" />
+    <path d="M12.5 15h4" />
+  </Glyph>
+);
+
+export const IconExternal = (props: IconProps) => (
+  <Glyph {...props}>
+    <path d="M14 4h6v6" />
+    <path d="M20 4 11 13" />
+    <path d="M18 14.5V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 19V8a1.5 1.5 0 0 1 1.5-1.5H10" />
+  </Glyph>
+);

@@ -22,18 +22,18 @@ export function AgentRoster({ workflow, plan }: AgentRosterProps) {
     : 0;
 
   return (
-    <aside className="surface grain relative flex w-[284px] shrink-0 flex-col overflow-hidden rounded-2xl border border-white/[0.07]">
-      <header className="relative border-b border-white/[0.07] px-3.5 py-3">
+    <aside className="void-card relative flex w-[284px] shrink-0 flex-col overflow-hidden rounded-2xl">
+      <header className="relative border-b border-white/[0.08] bg-white/[0.02] px-3.5 py-3">
         <div className="flex items-center gap-1.5">
-          <Users className="h-3.5 w-3.5 text-state-completed" />
-          <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-foreground">
+          <Users className="h-3.5 w-3.5 text-stream" />
+          <h2 className="font-head text-[11px] font-semibold uppercase tracking-[0.16em] text-white">
             Agent Roster
           </h2>
         </div>
         <div className="mt-2 flex items-center gap-2">
           <div className="h-1 flex-1 overflow-hidden rounded-full bg-white/[0.07]">
             <div
-              className="h-full rounded-full bg-state-cached transition-[width] duration-500"
+              className="h-full rounded-full bg-stream transition-[width] duration-500"
               style={{ width: `${recall}%` }}
             />
           </div>

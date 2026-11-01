@@ -20,8 +20,8 @@ import { cn } from "@/lib/utils";
 import { useTelemetryStore } from "@/store/useTelemetryStore";
 
 const LANES: { pipeline: PipelineType; label: string; stroke: string; text: string }[] = [
-  { pipeline: "baseline", label: "Baseline", stroke: "hsl(var(--state-blocking))", text: "text-state-blocking" },
-  { pipeline: "compiled", label: "Compiled", stroke: "hsl(var(--state-running))", text: "text-state-running" },
+  { pipeline: "baseline", label: "Baseline", stroke: "hsl(0 0% 58%)", text: "text-white/60" },
+  { pipeline: "compiled", label: "Compiled", stroke: "hsl(var(--stream))", text: "text-stream" },
 ];
 
 const W = 280;
@@ -72,15 +72,15 @@ export function BudgetBurn({ declaredBudget }: { declaredBudget: number }) {
   return (
     <div
       className={cn(
-        "flex w-[300px] shrink-0 flex-col justify-center rounded-xl border px-2.5 py-1.5 transition-colors",
+        "flex w-full flex-col justify-center rounded-2xl p-4 transition-colors",
         critical
-          ? "border-state-failed/60 bg-state-failed/[0.06]"
+          ? "border border-state-failed/60 bg-state-failed/[0.06]"
           : warned
-            ? "border-state-blocking/55 bg-state-blocking/[0.05]"
-            : "border-white/[0.07] bg-background/40",
+            ? "border border-amber-400/55 bg-amber-400/[0.06]"
+            : "void-card",
       )}
     >
-      <div className="flex items-baseline justify-between gap-2 text-[9px] uppercase tracking-[0.16em] text-muted-foreground">
+      <div className="flex items-baseline justify-between gap-2 font-sans text-[10px] uppercase tracking-[0.16em] text-white/45">
         <span>
           Budget used · of <span className="tabular normal-case">{formatBudget(budget)}</span>
         </span>
@@ -97,14 +97,14 @@ export function BudgetBurn({ declaredBudget }: { declaredBudget: number }) {
         <svg
           viewBox={`0 0 ${W} ${H}`}
           preserveAspectRatio="none"
-          className="block h-9 w-full overflow-visible"
+          className="mt-1 block h-[108px] w-full overflow-visible"
           role="img"
           aria-label={`Budget used: ${lanes
             .map((lane) => `${lane.label} ${formatPctTight(lane.pct)}`)
             .join(", ")} of ${formatBudget(budget)}. Alerts at ${WARN_PCT}% and when the breaker trips.`}
         >
           <line x1={0} x2={W} y1={H - 1} y2={H - 1} stroke="hsl(0 0% 100% / 0.1)" vectorEffect="non-scaling-stroke" />
-          {yTop >= WARN_PCT && <Threshold y={y(WARN_PCT)} tone="hsl(var(--state-blocking) / 0.75)" />}
+          {yTop >= WARN_PCT && <Threshold y={y(WARN_PCT)} tone="hsl(38 92% 55% / 0.8)" />}
           {yTop >= BREAKER_PCT && <Threshold y={y(BREAKER_PCT)} tone="hsl(var(--state-failed) / 0.85)" />}
           {lanes.map((lane) =>
             lane.samples.length ? (
@@ -121,11 +121,11 @@ export function BudgetBurn({ declaredBudget }: { declaredBudget: number }) {
             ) : null,
           )}
         </svg>
-        <span className="tabular pointer-events-none absolute -top-0.5 right-0 text-[8px] text-muted-foreground/70">
+        <span className="tabular pointer-events-none absolute -top-0.5 right-0 font-sans text-[9px] text-white/35">
           {yTop >= WARN_PCT ? `${WARN_PCT}% / ${BREAKER_PCT}% lines` : `axis 0–${formatPctTight(yTop)}`}
         </span>
         {idle && (
-          <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[9px] text-muted-foreground/60">
+          <span className="pointer-events-none absolute inset-0 flex items-center justify-center font-sans text-[11px] text-white/35">
             run a pipeline to see its spend
           </span>
         )}

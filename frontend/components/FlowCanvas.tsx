@@ -80,14 +80,14 @@ export function FlowCanvas({ workflow, run, variant, tiers, sequence }: FlowCanv
       nodesDraggable={false}
       nodesConnectable={false}
       edgesFocusable={false}
-      proOptions={{ hideAttribution: false }}
+      proOptions={{ hideAttribution: true }}
       className="bg-transparent"
     >
       <Background
         variant={BackgroundVariant.Dots}
-        gap={24}
+        gap={26}
         size={1}
-        color={variant === "baseline" ? "hsl(25 40% 24%)" : "hsl(200 30% 22%)"}
+        color={variant === "baseline" ? "hsl(0 0% 24%)" : "hsl(83 40% 26%)"}
       />
     </ReactFlow>
   );

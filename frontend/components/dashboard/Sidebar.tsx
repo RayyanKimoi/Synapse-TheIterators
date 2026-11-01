@@ -113,6 +113,7 @@ export function Sidebar() {
             </Link>
           );
         })}
+
       </nav>
 
       <div className="px-3 pb-4">
