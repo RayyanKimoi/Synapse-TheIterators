@@ -11,7 +11,7 @@ from app.agent.terminal import plan, run_agent, suggest
 from app.main import create_app
 from app.models.telemetry import PipelineType
 
-WF = registry.summaries()[0].workflow_id
+WF = "wf_deep_research_v1"  # the reference pipeline the planner resolves "market" to
 
 
 def _collect(text: str, workflow_id: str | None = None) -> list[dict]:

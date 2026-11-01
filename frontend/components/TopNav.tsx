@@ -1,11 +1,14 @@
 "use client";
 
+import { useRef } from "react";
 import {
   CloudOff,
   Flag,
   Play,
+  RefreshCw,
   Rocket,
   Terminal,
+  Upload,
   Workflow,
   Zap,
 } from "lucide-react";
@@ -21,14 +24,21 @@ import {
 import type { CompilePlan, HealthStatus, WorkflowSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+const CUSTOM_VALUE = "__custom__";
+
 type TopNavProps = {
   workflows: WorkflowSummary[];
   selectedId: string | null;
   onSelect: (workflowId: string) => void;
+  /** Name of the uploaded IR in play, or null when a predefined one is selected. */
+  customLabel?: string | null;
+  onUploadIr?: (file: File) => void;
   health: HealthStatus | null;
   plan: CompilePlan | null;
   cacheWarm: boolean;
   onToggleCacheWarm: () => void;
+  noCache: boolean;
+  onToggleNoCache: () => void;
   onRunBaseline: () => void;
   onRunCompiled: () => void;
   onRunRace: () => void;
@@ -41,16 +51,21 @@ export function TopNav({
   workflows,
   selectedId,
   onSelect,
+  customLabel,
+  onUploadIr,
   health,
   plan,
   cacheWarm,
   onToggleCacheWarm,
+  noCache,
+  onToggleNoCache,
   onRunBaseline,
   onRunCompiled,
   onRunRace,
   busy,
   onOpenTerminal,
 }: TopNavProps) {
+  const fileInput = useRef<HTMLInputElement>(null);
   return (
     <header className="void-card relative flex flex-wrap items-center gap-3 overflow-hidden rounded-2xl px-4 py-2.5">
       <div className="relative flex items-center gap-2.5">
@@ -69,7 +84,12 @@ export function TopNav({
 
       <div className="relative h-7 w-px bg-white/[0.08]" />
 
-      <Select value={selectedId ?? undefined} onValueChange={onSelect}>
+      <Select
+        value={customLabel ? CUSTOM_VALUE : (selectedId ?? undefined)}
+        onValueChange={(value) => {
+          if (value !== CUSTOM_VALUE) onSelect(value);
+        }}
+      >
         <SelectTrigger className="relative h-9 w-[250px] rounded-xl border-white/[0.09] bg-background/60 text-xs">
           <SelectValue placeholder="Select a workflow" />
         </SelectTrigger>
@@ -83,8 +103,39 @@ export function TopNav({
               {workflow.name} · {workflow.node_count} nodes
             </SelectItem>
           ))}
+          {customLabel && (
+            <SelectItem value={CUSTOM_VALUE} className="text-xs text-stream">
+              {customLabel} · custom
+            </SelectItem>
+          )}
         </SelectContent>
       </Select>
+
+      {onUploadIr && (
+        <>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) onUploadIr(file);
+              event.target.value = "";
+            }}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-9 rounded-xl border-white/[0.09] text-xs"
+            onClick={() => fileInput.current?.click()}
+            title="Upload a custom workflow IR (.json)"
+          >
+            <Upload className="mr-1 h-3 w-3 text-stream" />
+            Upload IR
+          </Button>
+        </>
+      )}
 
       {plan && (
         <div className="relative flex items-center gap-1.5">
@@ -100,16 +151,33 @@ export function TopNav({
       <div className="relative ml-auto flex items-center gap-2">
         <button
           type="button"
-          onClick={onToggleCacheWarm}
-          aria-pressed={cacheWarm}
+          onClick={onToggleNoCache}
+          aria-pressed={noCache}
+          title="Dry run: bypass the semantic cache so a re-run re-executes"
           className={cn(
             "flex min-h-[36px] items-center gap-1.5 rounded-xl border px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors",
-            cacheWarm
+            noCache
+              ? "border-amber-400/60 bg-amber-400/15 text-amber-300 shadow-[0_0_20px_-8px_rgba(251,191,36,0.9)]"
+              : "border-white/[0.09] text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <RefreshCw className="h-3 w-3" />
+          Dry run
+        </button>
+        <button
+          type="button"
+          onClick={onToggleCacheWarm}
+          aria-pressed={cacheWarm}
+          disabled={noCache}
+          title={noCache ? "Disabled during a dry run" : "Pre-warm the semantic cache before the race"}
+          className={cn(
+            "flex min-h-[36px] items-center gap-1.5 rounded-xl border px-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors disabled:opacity-40",
+            cacheWarm && !noCache
               ? "border-stream/60 bg-stream/15 text-stream shadow-[0_0_20px_-8px_hsl(var(--stream)/0.9)]"
               : "border-white/[0.09] text-muted-foreground hover:text-foreground",
           )}
         >
-          <Zap className={cn("h-3 w-3", cacheWarm && "fill-current")} />
+          <Zap className={cn("h-3 w-3", cacheWarm && !noCache && "fill-current")} />
           Warm cache
         </button>
 

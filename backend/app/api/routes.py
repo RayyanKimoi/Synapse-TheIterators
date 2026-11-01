@@ -32,6 +32,8 @@ class ExecuteRequest(BaseModel):
     workflow_id: str | None = None
     mode: PipelineType = PipelineType.COMPILED
     cache_warm: bool = False
+    # Dry run: bypass the semantic cache entirely so a re-run re-executes.
+    no_cache: bool = False
     time_scale: float = Field(default=1.0, ge=1.0, le=200.0)
     # The user request the root agents work on; defaults to the workflow name.
     query: str | None = Field(default=None, min_length=1, max_length=MAX_QUERY_CHARS)
@@ -61,6 +63,7 @@ def _stream(
     time_scale: float,
     query: str | None,
     disabled: frozenset[str] = frozenset(),
+    no_cache: bool = False,
 ) -> EventSourceResponse:
     settings = get_settings()
     return EventSourceResponse(
@@ -68,6 +71,7 @@ def _stream(
             workflow,
             mode=mode,
             cache_warm=cache_warm,
+            no_cache=no_cache,
             tick_ms=settings.telemetry_tick_ms,
             time_scale=time_scale,
             query=query,
@@ -119,6 +123,7 @@ async def execute_stream(request: ExecuteRequest) -> EventSourceResponse:
         request.time_scale,
         request.query,
         frozenset(request.disabled_optimizations),
+        request.no_cache,
     )
 
 
@@ -127,6 +132,7 @@ async def execute_stream_get(
     workflow_id: str,
     mode: PipelineType = PipelineType.COMPILED,
     cache_warm: bool = False,
+    no_cache: bool = False,
     time_scale: TimeScale = 1.0,
     query: Annotated[str | None, Query(min_length=1, max_length=MAX_QUERY_CHARS)] = None,
     disabled: Annotated[str | None, Query(max_length=MAX_QUERY_CHARS)] = None,
@@ -138,7 +144,7 @@ async def execute_stream_get(
     """
     rejected = frozenset(part for part in (disabled or "").split(",") if part)
     return _stream(
-        _resolve(None, workflow_id), mode, cache_warm, time_scale, query, rejected
+        _resolve(None, workflow_id), mode, cache_warm, time_scale, query, rejected, no_cache
     )
 
 

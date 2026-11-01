@@ -84,8 +84,10 @@ class NodeExecutor:
         prefetch: frozenset[str] = frozenset(),
         fusion: dict[str, FusionGroup] | None = None,
         prime: bool = False,
+        no_cache: bool = False,
     ) -> None:
         self.prime = prime
+        self.no_cache = no_cache
         self.graph = graph
         self.prefetch = prefetch
         self.fusion = fusion or {}
@@ -150,7 +152,13 @@ class NodeExecutor:
         question, context = self._prompt_parts(node)
         namespace = node_namespace(self.scope, node)
 
-        vectors, hit = await self.cache.probe(namespace, query=question, context=context)
+        # A dry run touches the cache not at all: no probe, no store, so the same
+        # workflow run twice re-executes instead of being served its first answer.
+        vectors, hit = (
+            (None, None)
+            if self.no_cache
+            else await self.cache.probe(namespace, query=question, context=context)
+        )
         if hit is not None:
             self.outcomes[node_id] = NodeOutcome(
                 node_id,
@@ -179,14 +187,15 @@ class NodeExecutor:
 
         # Awaited, not fired and forgotten: the write never blocks the event
         # loop, and a run that warms the cache must be able to rely on it.
-        await self.cache.store(
-            namespace,
-            query=question,
-            context=context,
-            text=outcome.output,
-            vectors=vectors,
-            ttl_s=ttl_for(node.type),
-        )
+        if not self.no_cache:
+            await self.cache.store(
+                namespace,
+                query=question,
+                context=context,
+                text=outcome.output,
+                vectors=vectors,
+                ttl_s=ttl_for(node.type),
+            )
         self.outcomes[node.id] = outcome
         return duration
 

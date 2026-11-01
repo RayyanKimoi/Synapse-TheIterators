@@ -10,7 +10,7 @@ from app.models.ir import WorkflowIR
 from app.models.telemetry import CircuitBreakerStatus, PipelineType, TelemetryFrame
 from app.runtime.runner import stream_telemetry
 
-WORKFLOW = registry.get(registry.summaries()[0].workflow_id)
+WORKFLOW = registry.get("wf_deep_research_v1")
 
 
 def _frames(workflow: WorkflowIR) -> list[TelemetryFrame]:

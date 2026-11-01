@@ -40,6 +40,10 @@ export type RunSummary = {
   node_count: number;
   cache_hits: number;
   aggregate_metrics: AggregateMetrics;
+  /** Merged JSON object emitted by the workflow's terminal nodes. */
+  final_output: Record<string, unknown>;
+  /** Completed LLM calls by where they were served: mock, ollama, litellm_proxy. */
+  llm_calls: Record<string, number>;
 };
 
 export type WorkflowNodeType = "llm_agent" | "tool_io";

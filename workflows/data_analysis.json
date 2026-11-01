@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "workflow_id": "wf_data_analysis_v1",
+  "name": "Data Pipeline Analysis",
+  "budget_limit_usd": 0.5,
+  "nodes": [
+    {
+      "id": "node_profile",
+      "type": "llm_agent",
+      "persona": "Schema Profiler",
+      "system_prompt": "Profile the dataset: infer column types, ranges and cardinality.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [],
+      "params": {}
+    },
+    {
+      "id": "node_quality",
+      "type": "llm_agent",
+      "persona": "Data Quality Analyst",
+      "system_prompt": "Assess the profiled dataset for nulls, outliers and integrity issues.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [
+        "node_profile"
+      ],
+      "params": {}
+    },
+    {
+      "id": "node_insights",
+      "type": "llm_agent",
+      "persona": "Insight Miner",
+      "system_prompt": "Surface the three most decision-relevant trends in the profiled dataset.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [
+        "node_profile"
+      ],
+      "params": {}
+    },
+    {
+      "id": "node_report",
+      "type": "llm_agent",
+      "persona": "Executive Reporter",
+      "system_prompt": "Combine the quality assessment and insights into a decision-ready brief.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [
+        "node_quality",
+        "node_insights"
+      ],
+      "params": {}
+    }
+  ],
+  "test_assertions": {
+    "required_output_keys": [
+      "summary",
+      "data_quality",
+      "recommendations"
+    ],
+    "min_semantic_similarity": 0.95,
+    "max_acceptable_latency_ms": 15000
+  }
+}

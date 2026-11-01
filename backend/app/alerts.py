@@ -39,11 +39,15 @@ def build_alert_payload(
     budget_usd: float,
     dashboard_base_url: str,
     breaker: bool = False,
+    ok: bool = False,
 ) -> dict[str, Any]:
-    """The Slack Block Kit body for one halted run. Pure."""
-    title = (
-        "⚠️ Circuit Breaker Triggered" if breaker else "🚨 SYNAPSE Alert: Run Halted"
-    )
+    """The Slack Block Kit body for one run, halted or completed. Pure."""
+    if breaker:
+        title = "⚠️ Circuit Breaker Triggered"
+    elif ok:
+        title = "✅ SYNAPSE Run Complete"
+    else:
+        title = "🚨 SYNAPSE Alert: Run Halted"
     fields = [
         ("Run ID", f"`{run_id}`"),
         ("Failed Node", f"`{failed_node}`"),

@@ -8,6 +8,7 @@ import { AgentTerminal } from "@/components/AgentTerminal";
 import { AnalyticsCharts } from "@/components/dashboard/AnalyticsCharts";
 import { TelemetryMeters } from "@/components/dashboard/TelemetryMeters";
 import { MatchmakerDeck } from "@/components/MatchmakerDeck";
+import { OutputPanel } from "@/components/OutputPanel";
 import { RaceArena } from "@/components/RaceArena";
 import { Scoreboard } from "@/components/Scoreboard";
 import { TopNav } from "@/components/TopNav";
@@ -16,6 +17,7 @@ import { compileWorkflow, fetchHealth, fetchWorkflow, fetchWorkflows } from "@/l
 import type {
   HealthStatus,
   OptimizationCandidate,
+  WorkflowIR,
   WorkflowSummary,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -24,16 +26,52 @@ import { useTelemetryStore } from "@/store/useTelemetryStore";
 export default function DashboardPage() {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [customIr, setCustomIr] = useState<WorkflowIR | null>(null);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [cacheWarm, setCacheWarm] = useState(false);
+  const [noCache, setNoCache] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // A rejected/invalid workflow IR (upload or compile), distinct from the
+  // backend being unreachable — the two need different messages.
+  const [irError, setIrError] = useState<string | null>(null);
 
   const workflow = useTelemetryStore((state) => state.workflow);
   const plan = useTelemetryStore((state) => state.plan);
   const runs = useTelemetryStore((state) => state.runs);
   const setWorkflow = useTelemetryStore((state) => state.setWorkflow);
 
-  const { start, startRace } = useWorkflowExecution(selectedId);
+  // A custom IR runs straight from memory (POSTed in the body); a predefined
+  // one streams by id over EventSource.
+  const { start, startRace } = useWorkflowExecution(
+    customIr ? null : selectedId,
+    customIr,
+  );
+
+  const onSelectWorkflow = useCallback((id: string) => {
+    setCustomIr(null);
+    setIrError(null);
+    setSelectedId(id);
+  }, []);
+
+  const onUploadIr = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const ir = JSON.parse(String(reader.result)) as WorkflowIR;
+        if (!ir || typeof ir !== "object" || !Array.isArray(ir.nodes)) {
+          throw new Error("not a workflow IR (missing a 'nodes' array)");
+        }
+        setIrError(null);
+        setCustomIr(ir);
+      } catch (error) {
+        setCustomIr(null);
+        setIrError(
+          `Could not read ${file.name}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    };
+    reader.readAsText(file);
+  }, []);
   const busy = runs.baseline.status === "streaming" || runs.compiled.status === "streaming";
 
   // Discover the backend once on mount.
@@ -56,31 +94,39 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // Compiling on selection gives us the dependency graph the compiled canvas needs.
+  // Compiling gives us the dependency graph the compiled canvas needs. A custom
+  // IR is compiled from memory; a predefined one is fetched by id first.
   useEffect(() => {
-    if (!selectedId) return;
+    if (!customIr && !selectedId) return;
     let cancelled = false;
     (async () => {
       try {
-        const ir = await fetchWorkflow(selectedId);
+        const ir = customIr ?? (await fetchWorkflow(selectedId as string));
         const compiled = await compileWorkflow(ir);
-        if (!cancelled) setWorkflow(ir, compiled);
+        if (cancelled) return;
+        setWorkflow(ir, compiled);
+        setIrError(null);
       } catch (error) {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        // A custom IR that won't compile is an invalid document, not a dead
+        // backend; a predefined one failing is more likely the backend itself.
+        if (customIr) setIrError(message);
+        else setLoadError(message);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedId, setWorkflow]);
+  }, [selectedId, customIr, setWorkflow]);
 
   // Passes the developer swiped left on. The backend skips them, so a verdict
   // changes what actually runs rather than only what the deck shows.
   const [rejected, setRejected] = useState<string[]>([]);
 
   const runOptions = useCallback(
-    () => ({ cacheWarm, disabled: rejected }),
-    [cacheWarm, rejected],
+    () => ({ cacheWarm: cacheWarm && !noCache, noCache, disabled: rejected }),
+    [cacheWarm, noCache, rejected],
   );
 
   const onApprove = useCallback(
@@ -88,9 +134,9 @@ export default function DashboardPage() {
       // Re-approving a pass puts it back in play, then shows the difference.
       const next = rejected.filter((id) => id !== candidate.id);
       setRejected(next);
-      start("compiled", { cacheWarm, disabled: next });
+      start("compiled", { cacheWarm: cacheWarm && !noCache, noCache, disabled: next });
     },
-    [start, cacheWarm, rejected],
+    [start, cacheWarm, noCache, rejected],
   );
 
   const onReject = useCallback(
@@ -131,11 +177,15 @@ export default function DashboardPage() {
       <TopNav
         workflows={workflows}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onSelect={onSelectWorkflow}
+        customLabel={customIr ? customIr.name || customIr.workflow_id : null}
+        onUploadIr={onUploadIr}
         health={health}
         plan={plan}
         cacheWarm={cacheWarm}
         onToggleCacheWarm={() => setCacheWarm((value) => !value)}
+        noCache={noCache}
+        onToggleNoCache={() => setNoCache((value) => !value)}
         onRunBaseline={() => start("baseline", runOptions())}
         onRunCompiled={() => start("compiled", runOptions())}
         onRunRace={() => startRace(runOptions())}
@@ -148,6 +198,12 @@ export default function DashboardPage() {
           Cannot reach the SYNAPSE backend ({loadError}). Start it with{" "}
           <code className="font-mono">uvicorn app.main:app --reload --port 8000</code> in{" "}
           <code className="font-mono">backend/</code>.
+        </div>
+      )}
+
+      {irError && (
+        <div className="rounded-xl border border-amber-400/50 bg-amber-400/10 px-4 py-2 text-xs text-amber-300">
+          Invalid workflow IR — the backend rejected it ({irError}). Fix the document and upload it again.
         </div>
       )}
 
@@ -202,6 +258,9 @@ export default function DashboardPage() {
             <Scoreboard workflow={workflow} plan={plan} />
           </section>
 
+          {/* The output each lane produced, directly beneath the two graphs. */}
+          <OutputPanel />
+
           {/* Analytics sit beneath the arena rather than above it, so the
               graph is what you land on and the numbers are what you scroll to. */}
           <div className="flex items-center gap-2.5 pt-3">
@@ -229,7 +288,7 @@ export default function DashboardPage() {
         workflowId={selectedId}
         workflows={workflows}
         busy={busy}
-        onSelectWorkflow={setSelectedId}
+        onSelectWorkflow={onSelectWorkflow}
         onArena={onArena}
       />
     </div>

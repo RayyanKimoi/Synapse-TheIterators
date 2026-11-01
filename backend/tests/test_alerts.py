@@ -4,8 +4,9 @@ No mock library: httpx ships MockTransport, and `send_alert` takes a transport
 for exactly this reason -- the same injection the judge's tests use.
 """
 
+import asyncio
+
 import httpx
-import pytest
 
 from app import alerts
 from app.config import Settings
@@ -47,6 +48,11 @@ def test_breaker_payload_has_its_own_header() -> None:
     assert payload["blocks"][0]["text"]["text"] == "⚠️ Circuit Breaker Triggered"
 
 
+def test_completed_run_payload_has_its_own_header() -> None:
+    payload = alerts.build_alert_payload(**PAYLOAD_KWARGS, ok=True)
+    assert payload["blocks"][0]["text"]["text"] == "✅ SYNAPSE Run Complete"
+
+
 def test_trailing_slash_does_not_double_up_in_the_link() -> None:
     payload = alerts.build_alert_payload(
         **(PAYLOAD_KWARGS | {"dashboard_base_url": "https://synapse.app/"})
@@ -57,8 +63,7 @@ def test_trailing_slash_does_not_double_up_in_the_link() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_send_posts_the_payload_and_reports_success() -> None:
+def test_send_posts_the_payload_and_reports_success() -> None:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -66,8 +71,10 @@ async def test_send_posts_the_payload_and_reports_success() -> None:
         return httpx.Response(200, text="ok")
 
     payload = alerts.build_alert_payload(**PAYLOAD_KWARGS)
-    sent = await alerts.send_alert(
-        payload, settings=_settings(), transport=httpx.MockTransport(handler)
+    sent = asyncio.run(
+        alerts.send_alert(
+            payload, settings=_settings(), transport=httpx.MockTransport(handler)
+        )
     )
 
     assert sent is True
@@ -75,40 +82,43 @@ async def test_send_posts_the_payload_and_reports_success() -> None:
     assert seen[0].url == "https://hooks.slack.com/services/T/B/x"
 
 
-@pytest.mark.asyncio
-async def test_network_failure_is_swallowed() -> None:
+def test_network_failure_is_swallowed() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectTimeout("slack unreachable")
 
-    sent = await alerts.send_alert(
-        {}, settings=_settings(), transport=httpx.MockTransport(handler)
+    sent = asyncio.run(
+        alerts.send_alert(
+            {}, settings=_settings(), transport=httpx.MockTransport(handler)
+        )
     )
     assert sent is False
 
 
-@pytest.mark.asyncio
-async def test_slack_error_status_is_swallowed() -> None:
-    sent = await alerts.send_alert(
-        {},
-        settings=_settings(),
-        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+def test_slack_error_status_is_swallowed() -> None:
+    sent = asyncio.run(
+        alerts.send_alert(
+            {},
+            settings=_settings(),
+            transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+        )
     )
     assert sent is False
 
 
-@pytest.mark.asyncio
-async def test_missing_webhook_skips_without_a_request() -> None:
+def test_missing_webhook_skips_without_a_request() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError("no request may be made without a webhook URL")
 
-    sent = await alerts.send_alert(
-        {}, settings=_settings(""), transport=httpx.MockTransport(handler)
+    sent = asyncio.run(
+        alerts.send_alert(
+            {}, settings=_settings(""), transport=httpx.MockTransport(handler)
+        )
     )
     assert sent is False
 
 
-@pytest.mark.asyncio
-async def test_notify_is_a_no_op_when_unconfigured() -> None:
-    """The runner calls this on every halted run; by default there is no webhook."""
+def test_notify_is_a_no_op_when_unconfigured(monkeypatch) -> None:
+    """The runner calls this on every halted run; with no webhook it schedules nothing."""
+    monkeypatch.setattr(alerts, "get_settings", lambda: _settings(""))
     alerts.notify(**{k: v for k, v in PAYLOAD_KWARGS.items() if k != "dashboard_base_url"})
     assert not alerts._in_flight

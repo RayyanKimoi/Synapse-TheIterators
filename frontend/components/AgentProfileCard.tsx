@@ -67,7 +67,7 @@ export function AgentProfileCard({ node, telemetry, depth }: AgentProfileCardPro
 
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[13px] font-semibold leading-tight text-foreground">
-            {node.persona}
+            {node.persona || node.id}
           </h3>
           <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
             {node.type === "llm_agent" ? node.model : node.tool_name}
@@ -123,7 +123,7 @@ export function AgentProfileCard({ node, telemetry, depth }: AgentProfileCardPro
 
       {open && (
         <p className="relative border-t border-white/[0.07] px-3 py-2 text-[10px] leading-relaxed text-muted-foreground">
-          {node.system_prompt}
+          {node.system_prompt || "No system prompt specified."}
         </p>
       )}
     </article>

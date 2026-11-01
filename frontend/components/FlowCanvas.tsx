@@ -44,7 +44,7 @@ export function FlowCanvas({ workflow, run, variant, tiers, sequence }: FlowCanv
         type: "agent",
         position: positions[node.id] ?? { x: 0, y: 0 },
         data: {
-          persona: node.persona,
+          persona: node.persona || node.id,
           nodeType: node.type,
           telemetry: nodeTelemetry(run, node.id),
           variant,

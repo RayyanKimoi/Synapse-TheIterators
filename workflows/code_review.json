@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "workflow_id": "wf_code_review_v1",
+  "name": "Automated Code Review",
+  "budget_limit_usd": 0.5,
+  "nodes": [
+    {
+      "id": "node_lint",
+      "type": "llm_agent",
+      "persona": "Static Analysis Linter",
+      "system_prompt": "Review the diff for correctness bugs and logic errors. Report terse findings.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [],
+      "params": {}
+    },
+    {
+      "id": "node_security",
+      "type": "llm_agent",
+      "persona": "Security Auditor",
+      "system_prompt": "Scan the diff for injection, auth, and secret-handling vulnerabilities.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [],
+      "params": {}
+    },
+    {
+      "id": "node_style",
+      "type": "llm_agent",
+      "persona": "Convention Reviewer",
+      "system_prompt": "Check the diff against project naming and formatting conventions.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [],
+      "params": {}
+    },
+    {
+      "id": "node_summarize",
+      "type": "llm_agent",
+      "persona": "Review Synthesizer",
+      "system_prompt": "Consolidate the lint, security and style findings into a single verdict.",
+      "model": "openai/qwen2.5-3b-instruct",
+      "dependencies": [
+        "node_lint",
+        "node_security",
+        "node_style"
+      ],
+      "params": {}
+    }
+  ],
+  "test_assertions": {
+    "required_output_keys": [
+      "verdict",
+      "findings",
+      "risk_level"
+    ],
+    "min_semantic_similarity": 0.95,
+    "max_acceptable_latency_ms": 15000
+  }
+}

@@ -152,6 +152,7 @@ async def stream_telemetry(
     *,
     mode: PipelineType = PipelineType.COMPILED,
     cache_warm: bool = False,
+    no_cache: bool = False,
     tick_ms: int = 100,
     time_scale: float = 1.0,
     run_id: str | None = None,
@@ -208,7 +209,7 @@ async def stream_telemetry(
     cache = cache if cache is not None else get_cache()
     query = query or workflow.name
 
-    if cache_warm:
+    if cache_warm and not no_cache:
         await _prime_cache(
             workflow, graph, plan, gateway, cache, mode.value, query, settings
         )
@@ -225,6 +226,7 @@ async def stream_telemetry(
         time_scale=time_scale,
         prefetch=prefetch,
         fusion=fusion,
+        no_cache=no_cache,
     )
 
     # Compiled dispatches over the real DAG; baseline over a chain of the same
@@ -331,21 +333,26 @@ async def stream_telemetry(
     final = frame(total_ms, contract)
     yield {"event": "telemetry_update", "data": final.model_dump_json()}
 
-    # Slack, best-effort and fire-and-forget. Once per halted run, not once per
-    # node: a halt has a single root cause and the nodes downstream of it only
-    # echo that. Posted after the failure is on the stream, so the dashboard is
+    # Slack, best-effort and fire-and-forget. Once per run, not once per node:
+    # a halt has a single root cause and the nodes downstream of it only echo
+    # that. Posted after the final frame is on the stream, so the dashboard is
     # already truthful by the time anyone follows the link.
     failed = next((node for node, timing in done.items() if timing.failed), None)
-    if failed is not None or budget.tripped:
-        error = executor.outcomes[failed].error if failed is not None else None
-        alerts.notify(
-            run_id=run_id,
-            failed_node=failed or "n/a",
-            reason=error or ("Budget exceeded" if budget.tripped else "Unhandled failure"),
-            spent_usd=budget.spent_usd,
-            budget_usd=budget.limit_usd if math.isfinite(budget.limit_usd) else 0.0,
-            breaker=budget.tripped,
-        )
+    error = executor.outcomes[failed].error if failed is not None else None
+    ok = failed is None and not budget.tripped
+    alerts.notify(
+        run_id=run_id,
+        failed_node=failed or "none",
+        reason=(
+            f"Completed ({mode})"
+            if ok
+            else error or ("Budget exceeded" if budget.tripped else "Unhandled failure")
+        ),
+        spent_usd=budget.spent_usd,
+        budget_usd=budget.limit_usd if math.isfinite(budget.limit_usd) else 0.0,
+        breaker=budget.tripped,
+        ok=ok,
+    )
 
     # History for the next run: the declared DAG, not the chain the baseline
     # executed over.

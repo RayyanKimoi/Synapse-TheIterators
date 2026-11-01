@@ -20,8 +20,10 @@ class WorkflowNode(BaseModel):
 
     id: str = Field(min_length=1)
     type: NodeType
-    persona: str
-    system_prompt: str
+    # Optional so a terse hand-written IR still validates; the display falls
+    # back to the node id and an llm_agent runs on the user query alone.
+    persona: str = ""
+    system_prompt: str = ""
     model: str | None = None
     tool_name: str | None = None
     dependencies: list[str] = Field(default_factory=list)
@@ -58,13 +60,15 @@ class WorkflowIR(BaseModel):
 
     schema_url: str | None = Field(default=None, alias="$schema")
     workflow_id: str = Field(min_length=1)
-    name: str
+    name: str = ""
     budget_limit_usd: float = Field(default=0.50, gt=0)
     nodes: list[WorkflowNode] = Field(min_length=1)
     test_assertions: TestAssertions = Field(default_factory=TestAssertions)
 
     @model_validator(mode="after")
     def _check_references(self) -> "WorkflowIR":
+        if not self.name:
+            self.name = self.workflow_id
         ids = [node.id for node in self.nodes]
         duplicates = sorted({node_id for node_id in ids if ids.count(node_id) > 1})
         if duplicates:
