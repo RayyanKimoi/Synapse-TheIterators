@@ -438,19 +438,3 @@ Every HTTP request, node execution, LLM completion, cache probe, and tool call i
 
 8. **Anatomy explainer modal not built.** PRD 9.1 specifies an isometric compiler breakdown modal in the top bar. The Phase 9 "agent rack" on the landing page is a different figure — the top-bar modal is still pending.
 
----
-
-## Team
-
-**The Iterators**
-
-Built for Bit N Build 2026.
-
----
-
-## Hackathon Rules Compliance
-
-- ✅ All code written during the hackathon window
-- ✅ Open-source dependencies only
-- ✅ No pre-built AI workflow platforms used (SYNAPSE is the platform)
-- ✅ Live demo available in offline mode (no API keys required)
